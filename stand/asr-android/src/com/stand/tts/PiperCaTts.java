@@ -120,9 +120,20 @@ public class PiperCaTts implements ICaStreamTts {
     @Override public int sendText(String text, String param) { return sendText(text); }
 
     @Override public int endSession() {
-        Log.i(TAG, "endSession");
+        Log.i(TAG, "endSession" + (begun ? "" : " (nothing was spoken)"));
         ICaTtsCallback c = cb;
-        if (c != null) { try { c.onMessage(2, ""); } catch (Throwable ignored) {} }  // onComplete
+        if (c != null) {
+            try {
+                // A session that pushed NO audio (Chinese request dropped, untranslatable text, an empty
+                // rewrite of a suppressed guide word) never sent onBegin, so the stock TtsPlayer is still
+                // in START and its onComplete does compareAndSet(PLAYING -> IDLE), which FAILS: it returns
+                // early and neither releases the audio focus nor delivers onPlayComplete to the caller —
+                // the turn stays open and the focus counter drifts. Send begin first so the player walks
+                // START -> PLAYING -> IDLE and finishes the turn cleanly even with zero audio.
+                if (!begun) { begun = true; c.onMessage(1, ""); }
+                c.onMessage(2, "");
+            } catch (Throwable ignored) {}
+        }
         begun = false;
         return 0;
     }

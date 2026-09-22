@@ -30,7 +30,7 @@ java -jar "$PROJ_DIR/tools/baksmali.jar" d --api 34 "$wd/classes6.dex" -o "$wd/s
 APPDIR="$wd/smali6/com/incall/apps/speechassistant/application"
 [ "$SWALLOW" = "1" ] && cp "$STAND_DIR/patches/smali/com/incall/apps/speechassistant/application/CrashSwallow.smali" "$APPDIR/"
 
-SM5="$wd/smali5" SM6="$wd/smali6" HOST="$HOST" SWALLOW="$SWALLOW" RUSSIAN_ASR="$RUSSIAN_ASR" TRIGGER="$TRIGGER" BRIDGE="${BRIDGE:-0}" NATIVE_CLOUD="${NATIVE_CLOUD:-0}" NO_CN_SR="${NO_CN_SR:-0}" NO_CN_ENGINE="${NO_CN_ENGINE:-0}" TTS_HOOK="${TTS_HOOK:-0}" TTS_REWRITE="${TTS_REWRITE:-0}" CAPTURE="${CAPTURE:-0}" WAKE_CHIME="${WAKE_CHIME:-1}" python3 - <<'PY'
+SM5="$wd/smali5" SM6="$wd/smali6" HOST="$HOST" SWALLOW="$SWALLOW" RUSSIAN_ASR="$RUSSIAN_ASR" TRIGGER="$TRIGGER" BRIDGE="${BRIDGE:-0}" NATIVE_CLOUD="${NATIVE_CLOUD:-0}" NO_CN_SR="${NO_CN_SR:-0}" NO_CN_ENGINE="${NO_CN_ENGINE:-0}" TTS_HOOK="${TTS_HOOK:-0}" TTS_REWRITE="${TTS_REWRITE:-0}" TTS_NO_FOCUS_GATE="${TTS_NO_FOCUS_GATE:-1}" CAPTURE="${CAPTURE:-0}" WAKE_CHIME="${WAKE_CHIME:-1}" python3 - <<'PY'
 import os, re
 SM5=os.environ["SM5"]; SM6=os.environ["SM6"]; HOST=os.environ["HOST"]
 SWALLOW=os.environ["SWALLOW"]=="1"; RU=os.environ["RUSSIAN_ASR"]=="1"; TRIG=os.environ["TRIGGER"]=="1"
@@ -40,6 +40,7 @@ NO_CN_SR=os.environ.get("NO_CN_SR")=="1"  # cut the iFlytek SR feed (no Mandarin
 NO_CN_ENGINE=os.environ.get("NO_CN_ENGINE")=="1"  # never start the iFlytek IAT engine (no Mandarin model load/decode) — frees CPU+RAM for GigaAM
 TTS_REWRITE=os.environ.get("TTS_REWRITE")=="1"  # rewrite ALL TtsPlayer.start text CJK->RU (catches NLG responses that play via the stock engine, e.g. brightness 好的,中控屏已调亮)
 WAKE_CHIME=os.environ.get("WAKE_CHIME")=="1"    # steering-key wake: tip text -> fixed marker «Слушаю» (PiperCaTts plays the chime for it; voice wake keeps the spoken greeting)
+TTS_NO_FOCUS_GATE=os.environ.get("TTS_NO_FOCUS_GATE","1")=="1"  # speak even when the car denies audio focus (see the patch below)
 TTS_HOOK=os.environ.get("TTS_HOOK")=="1"  # intercept TtsPlayer.start -> RuBridge.onTtsText (ZH->RU + Piper)
 b6=SM6+"/com/incall/apps"
 
@@ -67,6 +68,29 @@ if not NATIVE_CLOUD:
 if RU:
     repl(f"{b6}/voicebase/util/SettingsUtil.smali", "getLanguage()I",
          "    .registers 1\n    const/4 v0, 0x4\n    return v0")
+
+# --- classes5: TtsPlayer.requestTtsFocus — a denied focus must NOT cancel the reply.
+#     This car ranks the assistant's voice (VOICE_COMMAND) LOWEST in its audio policy: CALL 0,
+#     MUSIC 1, ANNOUNCEMENT 2, VOICE_COMMAND 3. com.incall.SoaBridgeTransit takes permanent
+#     ANNOUNCEMENT focus and holds it for minutes, so every reply was dropped before reaching our
+#     engine while commands still executed — "the assistant works but says nothing" (field report
+#     22.09.2026, confirmed on the car). Real phone calls stay silent: they are gated separately by
+#     VoiceEnableUtils "phone", not by focus. Ducking still works whenever focus IS granted.
+if TTS_NO_FOCUS_GATE:
+    tp = f"{SM5}/com/changan/speech/tts/TtsPlayer.smali"
+    s = open(tp, encoding='utf-8').read()
+    anchor = ("    iget-object p0, p0, Lcom/changan/speech/tts/TtsPlayer;->mFocusCounts:Ljava/util/concurrent/atomic/AtomicInteger;\n\n"
+              "    invoke-virtual {p0}, Ljava/util/concurrent/atomic/AtomicInteger;->decrementAndGet()I\n\n"
+              "    const/4 p0, 0x0\n\n"
+              "    return p0\n")
+    assert s.count(anchor) == 1, f"requestTtsFocus failure branch not found ({s.count(anchor)} matches)"
+    patched = ("    iget-object p0, p0, Lcom/changan/speech/tts/TtsPlayer;->mFocusCounts:Ljava/util/concurrent/atomic/AtomicInteger;\n\n"
+               "    invoke-virtual {p0}, Ljava/util/concurrent/atomic/AtomicInteger;->decrementAndGet()I\n\n"
+               "    invoke-static {}, Lcom/stand/bridge/RuBridge;->onTtsFocusDenied()V\n\n"
+               "    const/4 p0, 0x1\n\n"
+               "    return p0\n")
+    open(tp, 'w', encoding='utf-8').write(s.replace(anchor, patched, 1))
+    print("[patch] TtsPlayer.requestTtsFocus: denied focus no longer cancels the reply")
 
 # --- classes5: neutralize SpeechTracer uploads (no telemetry leaves the device) ---
 tr=f"{SM5}/com/changan/speech/tracer/UploadManager.smali"

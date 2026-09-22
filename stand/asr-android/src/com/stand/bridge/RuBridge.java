@@ -717,6 +717,18 @@ public final class RuBridge {
         sendToCloud(ru, true, zh, att);
     }
 
+    /** The car refused audio focus for a reply. In this car's audio policy the assistant's voice
+     *  (VOICE_COMMAND) has the LOWEST priority — below CALL, MUSIC and ANNOUNCEMENT — and
+     *  com.incall.SoaBridgeTransit holds permanent ANNOUNCEMENT focus for minutes at a time. The stock
+     *  player then drops the reply silently while the command still executes: "works but says nothing"
+     *  (field report 22.09.2026, confirmed on the car: "play failed, because audio focus can not
+     *  request" + CarAudioFocus REQUEST_FAILED). The build_sa TTS_NO_FOCUS_GATE patch makes the stock
+     *  player speak anyway and call this, so the event stays visible in the log. Calls are unaffected:
+     *  a real call is muted by the separate VoiceEnableUtils "phone" gate, not by focus. */
+    public static void onTtsFocusDenied() {
+        Log.w(TAG, "TTS focus denied by the car audio policy — speaking anyway");
+    }
+
     public static String ttsTextToRu(String text) {
         if (text == null) return null;
         String s = text.replaceAll("\\[[^\\]]*\\]", "").trim();   // drop [se55]/[w0]… prosody tags
