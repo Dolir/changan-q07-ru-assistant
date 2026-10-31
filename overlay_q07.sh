@@ -7,13 +7,12 @@
 #
 # Требует: adb root на ГУ и JDK 17 первым в PATH (см. build_q07.sh).
 set -euo pipefail
-export MSYS_NO_PATHCONV=1
 
 DEVICE="${1:?ip:port}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PKG=com.incall.apps.speechassistant
 DIR="/data/data/$PKG/files/overlay"
-ADB=(adb -s "$DEVICE")
+ADB=(env MSYS_NO_PATHCONV=1 adb -s "$DEVICE")
 
 "${ADB[@]}" root >/dev/null
 
