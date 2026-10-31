@@ -161,9 +161,56 @@ public final class GigaAsr {
     /** Language of a transcript ("ru" | "kk" | "ky" | "uz" | "en") — see {@link LangDetect}. */
     public static String detectLang(String text) { return LangDetect.detect(text); }
 
+    // Outside recorder: 16 kHz, 6 channels (stock log: «PcmOutRecorder start channel=6»), 12-byte frames.
+    private static final int OUT_CHANNELS = 6;
+    private static final int OUT_FRAME = OUT_CHANNELS * 2;
+    private static final int OUT_PREROLL = 9600 * OUT_CHANNELS;     // 600 ms: outside the phrase start was still clipped at 350 ms
+    private static final int OUT_LIMIT = 160000 * OUT_CHANNELS;     // the same 5 s as the decode tail
+    private static byte[] outRaw = new byte[2 * OUT_LIMIT];
+    private static int outLen = 0;
+
+    /** Outside mics, raw. Which channel carries the voice is decided per phrase in {@link #loudestOutside}. */
+    public static void acceptOutside(byte[] pcm, int len) {
+        if (pcm == null || len <= 0 || com.stand.tts.TeraTts.isSpeaking()) return;
+        int act = Math.min(len, pcm.length);
+        synchronized (buf) {
+            if (outLen + act > outRaw.length) keepOutside(OUT_LIMIT);
+            if (act > outRaw.length - outLen) return;
+            System.arraycopy(pcm, 0, outRaw, outLen, act);
+            outLen += act;
+        }
+    }
+
+    private static void keepOutside(int last) {
+        int keep = Math.min(outLen, last) / OUT_FRAME * OUT_FRAME;
+        System.arraycopy(outRaw, outLen - keep, outRaw, 0, keep);
+        outLen = keep;
+    }
+
+    private static byte[] loudestOutside(byte[] raw) {
+        long[] energy = new long[OUT_CHANNELS];
+        int frames = raw.length / OUT_FRAME;
+        for (int i = 0; i < frames; i++) {
+            for (int c = 0; c < OUT_CHANNELS; c++) {
+                int at = i * OUT_FRAME + c * 2;
+                energy[c] += Math.abs((short) ((raw[at + 1] << 8) | (raw[at] & 0xff)));
+            }
+        }
+        int best = 0;
+        for (int c = 1; c < OUT_CHANNELS; c++) if (energy[c] > energy[best]) best = c;
+        Log.i(TAG, "outside channels " + java.util.Arrays.toString(energy) + " -> " + best);
+        byte[] mono = new byte[frames * 2];
+        for (int i = 0; i < frames; i++) {
+            mono[i * 2] = raw[i * OUT_FRAME + best * 2];
+            mono[i * 2 + 1] = raw[i * OUT_FRAME + best * 2 + 1];
+        }
+        return mono;
+    }
+
     /** Start of a new utterance (wp==1): preserve pre-roll audio so initial consonants are never clipped. */
     public static void reset() {
         synchronized (buf) {
+            keepOutside(OUT_PREROLL);
             buf.reset();
             if (prerollCount > 0) {
                 if (prerollCount < PREROLL_SIZE) {
@@ -180,7 +227,7 @@ public final class GigaAsr {
 
     /** Middle chunks: append raw 16-bit LE PCM and keep ring-buffer. */
     public static void accept(byte[] pcm, int len) {
-        if (pcm == null || len <= 0) return;
+        if (pcm == null || len <= 0 || com.stand.tts.TeraTts.isSpeaking()) return;
         int act = Math.min(len, pcm.length);
         synchronized (buf) {
             buf.write(pcm, 0, act);
@@ -201,6 +248,10 @@ public final class GigaAsr {
             buf.reset();
             prerollCount = 0;
             prerollHead = 0;
+            if (outLen > 0) {
+                b = loudestOutside(java.util.Arrays.copyOf(outRaw, outLen));
+                outLen = 0;
+            }
         }
         if (b.length < RATE / 25 * 2) return "";   // <40 ms of audio → nothing
         if (b.length > 160000) {

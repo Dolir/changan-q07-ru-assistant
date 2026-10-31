@@ -226,12 +226,10 @@ repl(
      "    :stand_check_awake\n"
      "    invoke-static {}, Lcom/incall/apps/speechassistant/common/VoiceStateCache;->isWakeUp()Z\n"
      "    move-result v0\n"
-     "    if-nez v0, :stand_check_outside\n"
-     "    goto :stand_feed_run\n"
-     "    :stand_check_outside\n"
+     "    if-nez v0, :stand_feed_run\n"
      "    invoke-static {}, Lcom/incall/apps/speechassistant/common/VoiceStateCache;->isOutSide()Z\n"
      "    move-result v0\n"
-     "    if-eqz v0, :stand_feed_run\n"
+     "    if-nez v0, :stand_feed_run\n"
      "    const-string v0, \"STAND_VAD\"\n"
      "    const-string v1, \"speech_end/timeout ignored: assistant is asleep\"\n"
      "    invoke-static {v0, v1}, Landroid/util/Log;->i(Ljava/lang/String;Ljava/lang/String;)I\n"
@@ -301,7 +299,8 @@ for cls in ('TtsPlayer','TtsPlayer2'):
         r'(\.method public start\(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZLcom/incall/apps/speechassistant/tts/IPlayerListener;\)I\n\s*\.registers \d+\n)',
         ("    move-object/from16 v0, p2\n"
          "    move-object/from16 v1, p5\n"
-         "    invoke-static {v0, v1}, Lcom/stand/bridge/RuBridge;->onTtsText(Ljava/lang/String;Ljava/lang/Object;)Z\n"
+         "    move-object/from16 v2, p0\n"
+         "    invoke-static {v0, v1, v2}, Lcom/stand/bridge/RuBridge;->onTtsText(Ljava/lang/String;Ljava/lang/Object;Ljava/lang/Object;)Z\n"
          "    move-result v0\n"
          "    if-eqz v0, :stand_tts_orig\n"
          "    const/4 v0, 0x0\n"
@@ -359,7 +358,7 @@ repl(
     ("    move-object/from16 v0, p1\n"
      "    invoke-static {v0}, Lcom/stand/bridge/RuBridge;->isOurs(Ljava/lang/String;)Z\n"
      "    move-result v1\n"
-     "    if-eqz v1, :stand_pass_arb\n"
+     "    if-nez v1, :stand_pass_arb\n"
      "    invoke-static {}, Lcom/incall/apps/speechassistant/common/VoiceStateCache;->isOutSide()Z\n"
      "    move-result v1\n"
      "    if-eqz v1, :stand_pass_arb\n"
@@ -412,7 +411,7 @@ repl(
     '    # do not stop outside recognize',
     'VoiceEnableUtils: bypass stopRecognize when outside')
 
-# (k) OutSeEngineProxy.process([BI)I -> stereo (step 4) downmix to GigaAsr.accept (only when outside)
+# (k) OutSeEngineProxy.process([BI)I -> raw 6-channel PCM to GigaAsr.acceptOutside (only when outside)
 op_path = path('classes14','com','incall','apps','voiceservice','proxy','OutSeEngineProxy.smali')
 if os.path.exists(op_path):
     op_s = open(op_path, encoding='utf-8').read()
@@ -425,22 +424,7 @@ if os.path.exists(op_path):
             "    invoke-static {}, Lcom/incall/apps/speechassistant/common/VoiceStateCache;->isOutSide()Z\n"
             "    move-result v0\n"
             "    if-eqz v0, :cond_out_dmx_skip\n"
-            "    new-array v4, p2, [B\n"
-            "    const/4 v5, 0x0\n"
-            "    const/4 v6, 0x0\n"
-            "    :out_dmx_loop\n"
-            "    if-ge v5, p2, :out_dmx_done\n"
-            "    aget-byte v7, p1, v5\n"
-            "    add-int/lit8 v8, v5, 0x1\n"
-            "    aget-byte v8, p1, v8\n"
-            "    aput-byte v7, v4, v6\n"
-            "    add-int/lit8 v0, v6, 0x1\n"
-            "    aput-byte v8, v4, v0\n"
-            "    add-int/lit8 v6, v6, 0x2\n"
-            "    add-int/lit8 v5, v5, 0x4\n"
-            "    goto :out_dmx_loop\n"
-            "    :out_dmx_done\n"
-            "    invoke-static {v4, v6}, Lcom/stand/asr/GigaAsr;->accept([BI)V\n"
+            "    invoke-static {p1, p2}, Lcom/stand/asr/GigaAsr;->acceptOutside([BI)V\n"
             "    :cond_out_dmx_skip\n"
             "    iget-object v0, p0, Lcom/incall/apps/voiceservice/proxy/SeEngineProxy;->mCaSe:Lcom/incall/voicecore/se/ICaSe;\n"
             "    if-eqz v0, :cond_out_ret_zero\n"
@@ -454,7 +438,7 @@ if os.path.exists(op_path):
         )
         op_s += out_proc
         open(op_path, 'w', encoding='utf-8').write(op_s)
-        print("  [hook] OutSeEngineProxy.process -> stereo downmix (step 4) + GigaAsr.accept (only outside)")
+        print("  [hook] OutSeEngineProxy.process -> GigaAsr.acceptOutside (only outside)")
 
 # (l) GuideWordsStore.getSleepText / getSrText -> RuBridge.ruGuideSleep / ruGuideSr (Russian hints)
 repl(

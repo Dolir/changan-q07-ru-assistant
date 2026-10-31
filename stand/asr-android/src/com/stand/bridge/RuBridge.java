@@ -27,7 +27,7 @@ import static com.stand.bridge.Ru2Zh.*;
 public final class RuBridge {
     private static final String TAG = "RuBridge";
     /** Bump with every published dex: the log shows which code actually runs. */
-    private static final String CODE_VERSION = "q07-2";
+    private static final String CODE_VERSION = "q07-5";
 
 
     // Stock TTS-engine registry (world-writable dir; the app runs as uid=system). Registering our
@@ -462,7 +462,7 @@ public final class RuBridge {
         if (mainProc) { ensureTtsRegistered(); ensureCustomWakeword(); }  // self-install once (shared file/setting)
         // TeraTTS is loaded ONLY in :tts (PiperCaTts synthesizes there). main speaks via GlobalTtsClient,
         // which routes to the :tts engine, so main needs no ~300 MB Tera copy of its own.
-        if (ttsProc) { try { com.stand.tts.TeraTts.init(appCtx); } catch (Throwable ignored) {} }
+        if (ttsProc || mainProc) { try { com.stand.tts.TeraTts.init(appCtx); } catch (Throwable ignored) {} }
         // GigaAM ASR: the audio-callback feed (SrBaseSession) only runs in the main process.
         if (mainProc) {
             try { com.stand.asr.GigaAsr.init(appCtx); } catch (Throwable t) { Log.e(TAG, "gigaam init", t); }
@@ -759,6 +759,8 @@ public final class RuBridge {
     public static void checkArbResult(String json) {
         try {
             if (json == null) return;
+            // Stock's Chinese recognizer also hears the Russian phrase and fails on it: that is not our command failing
+            if (!isOurs(json)) return;
             org.json.JSONArray a = new JSONObject(json).optJSONArray("nluResults");
             if (a == null || a.length() == 0) return;
             JSONObject r = a.optJSONObject(0); if (r == null) return;
@@ -879,7 +881,7 @@ public final class RuBridge {
      *  text, so most of it is Cyrillic already — we just voice it with our Piper RU engine instead of
      *  the Mandarin iFlytek one (which mangles Russian). Residual Chinese → zh2ru table.
      *  @return true if we handled it (Piper + callbacks); false → let stock TTS play it. */
-    public static boolean onTtsText(String text, final Object listener) {
+    public static boolean onTtsText(String text, final Object listener, final Object player) {
         try {
             if (text == null || text.trim().isEmpty()) return false;
             Log.i(TAG, "TTS text in: " + text);
@@ -893,16 +895,113 @@ public final class RuBridge {
             } else {
                 return false;                          // latin/digits only → let stock handle
             }
+            if (repeatedFailure(text, ru)) {
+                Log.i(TAG, "TTS skipped, same failure reply just played: " + ru);
+                finishTts(listener, player);
+                return true;
+            }
             // NB: do NOT push the answer to the widget here — the stock UI already renders it (the
             // russified NLG text). A duplicate showOnScreen leaves the previous answer lingering and
             // it flashes for a frame at the next dictation. We only replace the VOICE, not the UI.
             callListener(listener, "onStartState", int.class, Integer.valueOf(0));
             callListener(listener, "onPlayBegin", String.class, ru);
             com.stand.tts.TeraTts.speak(ru, new Runnable() { public void run() {
-                callListener(listener, "onPlayComplete", null, null);
+                finishTts(listener, player);
             }});
             return true;
         } catch (Throwable t) { Log.e(TAG, "onTtsText", t); return false; }
+    }
+
+    private static final String[] NAVIGATOR_PACKAGES = { "ru.yandex.yandexnavi", "ru.dublgis.dgismobile", "ru.yandex.yandexmaps" };
+
+    /** «открой навигатор», «запусти ютуб»: works without the backend, by the launcher label of an installed app. */
+    private static boolean openAppByName(String phrase) {
+        String[] w = phrase.trim().split("\\s+", 2);
+        if (w.length < 2 || !(w[0].equals("открой") || w[0].equals("запусти"))) return false;
+        String name = w[1].replace("приложение", "").trim();
+        if (name.length() < 2) return false;
+        try {
+            android.content.pm.PackageManager pm = appCtx.getPackageManager();
+            if (name.startsWith("навигат") || name.startsWith("навигац")) {
+                for (String pkg : NAVIGATOR_PACKAGES) {
+                    if (launch(pm, pm.getLaunchIntentForPackage(pkg), "Открываю навигатор")) return true;
+                }
+            }
+            Intent q = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER);
+            for (android.content.pm.ResolveInfo r : pm.queryIntentActivities(q, 0)) {
+                String label = String.valueOf(r.loadLabel(pm));
+                if (label.equalsIgnoreCase(name)) {
+                    return launch(pm, pm.getLaunchIntentForPackage(r.activityInfo.packageName), "Открываю " + label);
+                }
+            }
+        } catch (Throwable t) { Log.e(TAG, "openAppByName", t); }
+        return false;
+    }
+
+    private static boolean launch(android.content.pm.PackageManager pm, Intent it, String reply) {
+        if (it == null) return false;
+        appCtx.startActivity(it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        speak(reply);
+        return true;
+    }
+
+    // On Q07 the stock chain executes an injected command silently, so the confirmation is ours.
+    private static final String CONFIRM_DONE = "Готово";
+    private static final java.util.Map<String, String> CONFIRM_VERBS = new java.util.HashMap<>();
+    static {
+        String[][] verbs = {
+            {"открой", "Открываю"}, {"закрой", "Закрываю"}, {"включи", "Включаю"}, {"выключи", "Выключаю"},
+            {"отключи", "Отключаю"}, {"запусти", "Запускаю"}, {"останови", "Останавливаю"}, {"поставь", "Ставлю"},
+            {"сделай", "Делаю"}, {"подними", "Поднимаю"}, {"опусти", "Опускаю"}, {"прибавь", "Прибавляю"},
+            {"убавь", "Убавляю"}, {"увеличь", "Увеличиваю"}, {"уменьши", "Уменьшаю"}, {"настрой", "Настраиваю"},
+        };
+        for (String[] v : verbs) CONFIRM_VERBS.put(v[0], v[1]);
+    }
+
+    /** «открой моё окно» -> «Открываю ваше окно». A form we don't know gets a plain «Готово». */
+    static String confirmation(String phrase) {
+        String[] w = phrase.trim().split("\\s+");
+        int verb = 0;
+        while (verb < w.length && (w[verb].equals("и") || w[verb].equals("пожалуйста"))) verb++;
+        if (verb == w.length || !CONFIRM_VERBS.containsKey(w[verb])) return CONFIRM_DONE;
+        StringBuilder out = new StringBuilder(CONFIRM_VERBS.get(w[verb]));
+        for (int i = verb + 1; i < w.length; i++) {
+            String word = w[i];
+            if (word.equals("пожалуйста")) continue;
+            if (word.equals("мое") || word.equals("моё")) word = "ваше";
+            else if (word.equals("мой")) word = "ваш";
+            else if (word.equals("мою")) word = "вашу";
+            else if (word.equals("мне")) word = "вам";
+            out.append(' ').append(word);
+        }
+        return out.toString();
+    }
+
+    /** Stock requested audio focus before start(), and releases it only from its own playback, which we replaced.
+     *  Unreleased, the focus count only grows and the wheel volume stays on the assistant's channel. */
+    private static void finishTts(Object listener, Object player) {
+        callListener(listener, "onPlayComplete", null, null);
+        if (player == null) return;
+        try {
+            java.lang.reflect.Method m = player.getClass().getDeclaredMethod("abandonFocus");
+            m.setAccessible(true);
+            m.invoke(player);
+        } catch (Throwable t) { Log.e(TAG, "abandonFocus", t); }
+    }
+
+    private static final long FAILURE_REPLY_GAP_MS = 20_000L;
+    private static long lastFailureReplyAt = -FAILURE_REPLY_GAP_MS;
+
+    /** While people talk in the listening window each phrase can fail in turn: say «didn't catch that» once, not every time. */
+    private static synchronized boolean repeatedFailure(String text, String ru) {
+        String s = ru.toLowerCase();
+        boolean failure = isLocalFailNlg(text) || isNotSupportReply(text) || s.contains("расслыш") || s.contains("услыш")
+                || s.contains("повтор") || s.contains("не понял");
+        if (!failure) return false;
+        long now = android.os.SystemClock.elapsedRealtime();
+        if (now - lastFailureReplyAt < FAILURE_REPLY_GAP_MS) return true;
+        lastFailureReplyAt = now;
+        return false;
     }
 
     private static void callListener(Object l, String method, Class<?> sig, Object arg) {
@@ -1771,6 +1870,15 @@ public final class RuBridge {
     /** Read SrBaseSession.getCurrentDirect() on the session object (which seat woke SR), or VoiceStateCache. */
     private static int currentDirect(Object session, int fallback) {
         try {
+            // Q07: the session is null here and getVwState is a state code, not a seat. Stock keeps the seat of the last
+            // wake here (1 driver, 2 passenger, 3/4 rear, 19 outside): the same value it answers «Пассажир, чем могу помочь» by.
+            try {
+                java.lang.reflect.Field f = Class.forName("com.incall.apps.speechassistant.common.VoiceStateCache")
+                        .getDeclaredField("mLastSrDirect");
+                f.setAccessible(true);
+                int d = ((java.util.concurrent.atomic.AtomicInteger) f.get(null)).get();
+                if (d >= 1) return d;
+            } catch (ClassNotFoundException | NoSuchFieldException ignored) {}
             if (session != null) {
                 Object v = session.getClass().getMethod("getCurrentDirect").invoke(session);
                 int d = ((Number) v).intValue();
@@ -1898,7 +2006,7 @@ public final class RuBridge {
             // Remember it (try #1) in case the native NLU can't handle the injected command: we then
             // re-send the RU to the LLM for one corrected try. See onLocalCommandFailed.
             noteInjected(ru, zhs[0], 1);
-            Log.i(TAG, "ru2zh: [" + ru + "] -> " + zhs[0]); injectZh(zhs[0]); return;
+            Log.i(TAG, "ru2zh: [" + ru + "] -> " + zhs[0]); injectZh(zhs[0]); speak(confirmation(low)); return;
         }
         if (zhs != null) {
             // Compound: inject clause by clause, serialized like the backend's multi-intent path. Not noted
@@ -1909,7 +2017,13 @@ public final class RuBridge {
                     if (i > 0) { try { Thread.sleep(900); } catch (InterruptedException ignored) {} }
                     injectZh(zhs[i]);
                 }
+                speak(CONFIRM_DONE);
             }}).start();
+            return;
+        }
+        if (openAppByName(low)) return;
+        if (low.contains("что ты умеешь") || low.contains("что умеешь")) {
+            speak("Управляю окнами, люком, климатом, сиденьями и светом, открываю приложения.");
             return;
         }
         // Free-form (weather / knowledge / chat): the command map missed → send RAW Russian to our
@@ -2454,7 +2568,7 @@ public final class RuBridge {
                 arr.put(new JSONObject().put("name", e.getKey())
                         .put("value", e.getValue()).put("normalizedValue", e.getValue()));
             }
-            String dirStr = (wakeZone == 18) ? "outside" : "front_left";
+            String dirStr = (wakeZone >= 16) ? "outside" : "front_left";
             return new JSONObject().put("query", query).put("requestId", rid).put("nluType", 0).put("zoneId", wakeZone)
                     .put("direction", dirStr)
                     .put("nluResults", new org.json.JSONArray().put(nlu)).toString();

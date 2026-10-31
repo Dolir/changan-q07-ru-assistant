@@ -1443,7 +1443,7 @@ final class Ru2Zh {
 
     private static String zhVehicleInfo(String s) {
         if ((s.contains("сколько") && (s.contains("заряд") || s.contains("батаре")))
-            || (s.contains("заряд") && (s.contains("какой") || s.contains("уровень") || s.contains("остал")
+            || (s.contains("заряд") && (s.contains("какой") || s.contains("уровень") || s.contains("остал") || s.contains("батаре")
                 || s.contains("покажи") || s.contains("скажи")))
             || s.contains("что по заряд") || s.contains("как там заряд")
             || s.contains("запас хода") || s.contains("сколько бензина") || s.contains("остаток топлива"))

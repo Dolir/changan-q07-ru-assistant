@@ -44,7 +44,8 @@ public final class TeraTts {
             });
     // Fixed wake/idle prompts spoken by the assistant (see RuBridge.zh2ru: wake prompt → "Чем могу помочь").
     private static final String[] PREWARM = { "Чем могу помочь", "Пассажир, чем могу помочь",
-                                              "Да", "До свидания" };
+                                              "Да", "До свидания", "Слушаю", "Готово",
+                                              "Открываю окно", "Закрываю окно" };
 
     private static String procName() {
         try {
@@ -82,7 +83,8 @@ public final class TeraTts {
         appCtx = c.getApplicationContext();
         // init() is called once per PiperCaTts instance (config maps several engines to it); guard so
         // engine load + greeting prewarm run exactly ONCE, not 3× (which stormed the CPU at startup).
-        if (isTtsProcess() && STARTED.compareAndSet(false, true)) new Thread(new Runnable() { public void run() {
+        // Q07 has no :tts process, so without this the first reply waits ~7 s for the models.
+        if (STARTED.compareAndSet(false, true)) new Thread(new Runnable() { public void run() {
             ensure();
             for (String g : PREWARM) {   // warm the engine + cache fixed greetings → instant on wake
                 try { synthPcm16(g, RATE); } catch (Throwable ignored) {}
@@ -255,13 +257,33 @@ public final class TeraTts {
     }
     private static void runQuiet(Runnable r) { try { r.run(); } catch (Throwable ignored) {} }
 
+    /** As TtsAudioManager.getAudioTrack: the assistant's own channel is 18, the external speaker 21, both content type 4. */
+    private static final int USAGE_CABIN = 18;
+    private static final int USAGE_OUTSIDE = 21;
+    private static final int CONTENT_VOICE = 4;
+
+    private static boolean outside() {
+        try {
+            Class<?> c = Class.forName("com.incall.apps.speechassistant.common.VoiceStateCache");
+            return (Boolean) c.getMethod("isOutSide").invoke(null);
+        } catch (Throwable t) { Log.w(TAG, "outside", t); return false; }
+    }
+
+    /** After the track stops the cabin still rings for a moment. */
+    private static final long ECHO_TAIL_MS = 600;
+    private static volatile long speakingUntil = 0;
+
+    /** The microphones hear our own voice: anything recorded now would come back as a command. */
+    public static boolean isSpeaking() { return android.os.SystemClock.elapsedRealtime() < speakingUntil; }
+
     /** Stream 16-bit mono PCM through AudioTrack (blocks ~duration+250 ms). */
     private static synchronized void playPcm(byte[] pcm, int sr) {
         try {
             int min = AudioTrack.getMinBufferSize(sr, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT);
+            boolean out = outside();
             android.media.AudioAttributes attrs = new android.media.AudioAttributes.Builder()
-                    .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH)
-                    .setUsage(android.media.AudioAttributes.USAGE_ASSISTANT)
+                    .setContentType(CONTENT_VOICE)
+                    .setUsage(out ? USAGE_OUTSIDE : USAGE_CABIN)
                     .build();
             AudioFormat fmt = new AudioFormat.Builder()
                     .setSampleRate(sr)
@@ -274,6 +296,7 @@ public final class TeraTts {
             at.play();
             at.write(pcm, 0, pcm.length);
             long ms = (long) (pcm.length / 2 / (double) sr * 1000) + 250;
+            speakingUntil = android.os.SystemClock.elapsedRealtime() + ms + ECHO_TAIL_MS;
             Thread.sleep(ms);
             at.stop(); at.release();
             Log.i(TAG, "playback done (" + pcm.length + " b @" + sr + ")");
