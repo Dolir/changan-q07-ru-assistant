@@ -657,7 +657,10 @@ final class Ru2Zh {
             if (p == 50) return z + "车窗开一半";
             if (p > 0) return z + "车窗开到百分之" + p;
             // "опусти" = OPEN (window goes down), "подними/вверх" = CLOSE — inverse of isOff!
-            boolean close = s.contains("подним") || s.contains("закр") || s.contains("выключ") || s.contains("вверх");
+            boolean close = s.contains("подним") || s.contains("закр") || s.contains("закро")
+                || s.contains("прикро") || s.contains("задвинь")
+                || ((s.contains("крой") || s.contains("кройте")) && !s.contains("откр"))
+                || s.contains("выключ") || s.contains("вверх");
             return (close ? "关闭" : "打开") + z + "车窗";
         }
         // "крыша/панорама" = люк, но НЕ "крышка багажника/бензобака/зарядки", не шторка и НЕ
@@ -671,20 +674,24 @@ final class Ru2Zh {
             int p = percentOf(s);
             if (p == 50) return "天窗开一半";                                                  // SET_SUNROOF_WINDOW ratio=50% (captured)
             if (p > 0) return "天窗开到百分之" + p;                                           // same ratio slot as 车窗开到百分之N
-            return off ? "关闭天窗" : "打开天窗";
+            boolean close = off || s.contains("закр") || s.contains("закро") || s.contains("прикро")
+                || ((s.contains("крой") || s.contains("кройте")) && !s.contains("откр"));
+            return close ? "关闭天窗" : "打开天窗";
         }
         if (s.contains("шторк") || s.contains("солнцезащит")) {
+            boolean close = off || s.contains("закр") || s.contains("закро") || s.contains("прикро")
+                || s.contains("задвинь") || ((s.contains("крой") || s.contains("кройте")) && !s.contains("откр"));
             boolean winShade = win || s.contains("боков") || s.contains("задн") || s.contains("сзади");
             // Partial opening (user report 17.09: «шторка панорамы наполовину» only ever went fully open/closed —
             // the percent was dropped here). Same `ratio` slot and wording as the sunroof (天窗开一半 was captured
             // on the car); the 遮阳帘 forms themselves are NOT yet confirmed on a car. «закрой на 30%» = 70% open.
             int sp = winShade ? -1 : percentOf(s);
-            if (sp > 0 && sp < 100 && off) sp = 100 - sp;
+            if (sp > 0 && sp < 100 && close) sp = 100 - sp;
             if (sp == 50) return "遮阳帘开一半";
             if (sp > 0 && sp < 100) return "遮阳帘开到百分之" + sp;
             if (winShade)
-                return (off ? "关闭" : "打开") + "车窗遮阳帘";                                // SET_WINDOW_SUN_SHADE
-            return off ? "关闭遮阳帘" : "打开遮阳帘";                                        // SET_SUN_SHADE
+                return (close ? "关闭" : "打开") + "车窗遮阳帘";                                // SET_WINDOW_SUN_SHADE
+            return close ? "关闭遮阳帘" : "打开遮阳帘";                                        // SET_SUN_SHADE
         }
         if (s.contains("все") && (s.contains("открой") || s.contains("закрой"))
             && !s.contains("приложен") && !win && s.trim().split("\\s+").length <= 3)
@@ -701,17 +708,19 @@ final class Ru2Zh {
         // (OP_UPPER_TAILGATE / OP_LOWER_TAILGATE) — not yet confirmed on an E07.
         boolean board = s.contains("борт") && !s.contains("бортов") && !s.contains("на борту");
         if ((s.contains("багажник") || s.contains("кузов") || board) && !s.contains("свет") && !s.contains("лампа")) {
+            boolean close = off || s.contains("закр") || s.contains("закро") || s.contains("опусти")
+                || ((s.contains("крой") || s.contains("кройте")) && !s.contains("откр"));
             if (s.contains("стекл") || s.contains("окн") || s.contains("окош"))
-                return unsafeGate((off ? "关闭" : "打开") + "后备窗");                        // catalog: 后备窗 (tailgate glass)
-            if (s.contains("передн") || s.contains("фрунк")) return unsafeGate(off ? "关闭前备箱" : "打开前备箱"); // OP_FRUNK
+                return unsafeGate((close ? "关闭" : "打开") + "后备窗");                        // catalog: 后备窗 (tailgate glass)
+            if (s.contains("передн") || s.contains("фрунк")) return unsafeGate(close ? "关闭前备箱" : "打开前备箱"); // OP_FRUNK
             boolean roof = (s.contains("крыша") || s.contains("крышу") || s.contains("крыши")) && !s.contains("крышк");
             if (s.contains("верхн") || s.contains("верх ") || roof)
-                return unsafeGate(off ? "关闭上尾门" : "打开上尾门");                           // OP_UPPER_TAILGATE
+                return unsafeGate(close ? "关闭上尾门" : "打开上尾门");                           // OP_UPPER_TAILGATE
             if (s.contains("нижн") || board) {
-                boolean close = s.contains("подним") || s.contains("подыми") || s.contains("закр") || s.contains("верни");
-                return unsafeGate(close ? "关闭下尾门" : "打开下尾门");                        // OP_LOWER_TAILGATE
+                boolean boardClose = s.contains("подним") || s.contains("подыми") || s.contains("закр") || s.contains("верни");
+                return unsafeGate(boardClose ? "关闭下尾门" : "打开下尾门");                        // OP_LOWER_TAILGATE
             }
-            return unsafeGate(off ? "关闭后备箱" : "打开后备箱");                            // OP_TRUNK
+            return unsafeGate(close ? "关闭后备箱" : "打开后备箱");                            // OP_TRUNK
         }
         if (s.contains("капот")) return unsafeGate(off ? "关闭前备箱" : "打开前备箱");       // OP_FRUNK
         if (s.contains("детск") && (s.contains("замок") || s.contains("блокировк")))
@@ -1560,6 +1569,8 @@ final class Ru2Zh {
     }
     static boolean isOff(String s) {
         return s.contains("выключ") || s.contains("отключ") || s.contains("выруб") || s.contains("закр")
+            || s.contains("закро") || s.contains("прикро") || s.contains("задвинь")
+            || ((s.contains("крой") || s.contains("кройте")) && !s.contains("откр"))
             || s.contains("опусти") || s.contains("останов") || s.contains("выкл ");
     }
 

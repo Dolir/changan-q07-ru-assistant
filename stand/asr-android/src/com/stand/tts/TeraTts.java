@@ -259,9 +259,17 @@ public final class TeraTts {
     private static synchronized void playPcm(byte[] pcm, int sr) {
         try {
             int min = AudioTrack.getMinBufferSize(sr, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT);
-            AudioTrack at = new AudioTrack(AudioManager.STREAM_MUSIC, sr,
-                    AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT,
-                    Math.max(min, pcm.length), AudioTrack.MODE_STREAM);
+            android.media.AudioAttributes attrs = new android.media.AudioAttributes.Builder()
+                    .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .setUsage(android.media.AudioAttributes.USAGE_ASSISTANT)
+                    .build();
+            AudioFormat fmt = new AudioFormat.Builder()
+                    .setSampleRate(sr)
+                    .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                    .build();
+            AudioTrack at = new AudioTrack(attrs, fmt, Math.max(min, pcm.length),
+                    AudioTrack.MODE_STREAM, AudioManager.AUDIO_SESSION_ID_GENERATE);
             track = at;
             at.play();
             at.write(pcm, 0, pcm.length);

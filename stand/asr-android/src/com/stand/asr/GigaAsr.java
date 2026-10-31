@@ -91,6 +91,12 @@ public final class GigaAsr {
 
     public static boolean ready() { return rec != null; }
 
+    // 350 ms ring buffer of pre-roll audio: 16000 samples/sec * 2 bytes/sample * 0.35s = 11200 bytes
+    private static final int PREROLL_SIZE = 11200;
+    private static final byte[] preroll = new byte[PREROLL_SIZE];
+    private static int prerollHead = 0;
+    private static int prerollCount = 0;
+
     /** Multilingual build (GigaAM-Multilingual CTC)? Only meaningful once the recognizer is ready. */
     public static boolean multilingual() { return multilingual; }
 
@@ -155,21 +161,54 @@ public final class GigaAsr {
     /** Language of a transcript ("ru" | "kk" | "ky" | "uz" | "en") — see {@link LangDetect}. */
     public static String detectLang(String text) { return LangDetect.detect(text); }
 
-    /** Start of a new utterance (wp==1): drop any leftover audio. */
-    public static void reset() { synchronized (buf) { buf.reset(); } }
+    /** Start of a new utterance (wp==1): preserve pre-roll audio so initial consonants are never clipped. */
+    public static void reset() {
+        synchronized (buf) {
+            buf.reset();
+            if (prerollCount > 0) {
+                if (prerollCount < PREROLL_SIZE) {
+                    buf.write(preroll, 0, prerollCount);
+                } else {
+                    buf.write(preroll, prerollHead, PREROLL_SIZE - prerollHead);
+                    if (prerollHead > 0) {
+                        buf.write(preroll, 0, prerollHead);
+                    }
+                }
+            }
+        }
+    }
 
-    /** Middle chunks: append raw 16-bit LE PCM. */
+    /** Middle chunks: append raw 16-bit LE PCM and keep ring-buffer. */
     public static void accept(byte[] pcm, int len) {
+        if (com.stand.bridge.RuBridge.isTtsSpeaking()) return;
         if (pcm == null || len <= 0) return;
-        synchronized (buf) { buf.write(pcm, 0, Math.min(len, pcm.length)); }
+        int act = Math.min(len, pcm.length);
+        synchronized (buf) {
+            buf.write(pcm, 0, act);
+            for (int i = 0; i < act; i++) {
+                preroll[prerollHead] = pcm[i];
+                prerollHead = (prerollHead + 1) % PREROLL_SIZE;
+                if (prerollCount < PREROLL_SIZE) prerollCount++;
+            }
+        }
     }
 
     /** End of utterance (wp==3): decode accumulated PCM to text (lowercase, no punctuation). */
     public static String finish() {
         if (!ensure()) { Log.e(TAG, "finish: recognizer not ready"); return ""; }
         byte[] b;
-        synchronized (buf) { b = buf.toByteArray(); buf.reset(); }
+        synchronized (buf) {
+            b = buf.toByteArray();
+            buf.reset();
+            prerollCount = 0;
+            prerollHead = 0;
+        }
         if (b.length < RATE / 25 * 2) return "";   // <40 ms of audio → nothing
+        if (b.length > 160000) {
+            byte[] tail = new byte[160000];
+            System.arraycopy(b, b.length - 160000, tail, 0, 160000);
+            b = tail;
+        }
         float[] f = new float[b.length / 2];
         for (int i = 0; i < f.length; i++) {
             int lo = b[2 * i] & 0xff, hi = b[2 * i + 1];   // hi keeps sign

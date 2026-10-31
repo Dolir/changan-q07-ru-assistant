@@ -1,5 +1,6 @@
 # build artifacts
 /out/
+/build/
 stand/work/
 stand/asr-android/build/
 **/*.dex

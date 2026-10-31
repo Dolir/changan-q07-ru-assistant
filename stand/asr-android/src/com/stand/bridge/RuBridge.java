@@ -205,6 +205,11 @@ public final class RuBridge {
      *  `lang`. Only the multilingual build (GigaAM-Multilingual, GIGAAM_ML=1) ever sets it to non-"ru". */
     static volatile String curLang = "ru";
     private static volatile int wakeZone = 1;        // detected speaking zone (SrBaseSession.getCurrentDirect: 1=driver,2=passenger,3/4=rear,5=rear-mid)
+    public static volatile boolean isTtsSpeaking = false;
+    private static volatile long lastTtsEndTime = 0;
+    public static boolean isTtsSpeaking() {
+        return isTtsSpeaking || (System.currentTimeMillis() - lastTtsEndTime < 600);
+    }
     // Force offline: online chat backend isn't ready, so unrecognized phrases give a local RU reply
     // instead of hitting the cloud. Flip to false once the LLM backend is live.
     private static final boolean OFFLINE_ONLY = false;  // ONLINE: free-form chat/knowledge → our backend (sda.tecrow.org)
@@ -479,47 +484,61 @@ public final class RuBridge {
      *  No streaming/partials — the stock SR gives clean start/end, so no VAD is needed. */
     private static void feedGigaam(Object session, long wp, byte[] pcm) {
         try {
+            if (isTtsSpeaking()) {
+                if (wp == 1) com.stand.asr.GigaAsr.reset();
+                return;
+            }
             if (wp == 1) { com.stand.asr.GigaAsr.reset(); lastText = ""; }
             if (pcm != null && pcm.length > 0) com.stand.asr.GigaAsr.accept(pcm, pcm.length);
             if (wp == 3) {
-                wakeZone = currentDirect(session, wakeZone); // which seat spoke
-                String text = com.stand.asr.GigaAsr.finish();
-                if (text != null && !text.isEmpty()) Log.i(TAG, "RU ASR (GigaAM): " + text);
-                // Multilingual build: a non-Russian phrase (kk/ky/uz/en) has no ru2zh mapping and MUST
-                // NOT pass through fuzzyFix (a Kazakh word one edit away from a Russian command word would
-                // be "corrected" into an actuation). It goes straight to the backend, tagged with its
-                // language; the backend answers in that language and may still return car commands.
-                String lang = com.stand.asr.GigaAsr.multilingual() ? com.stand.asr.GigaAsr.detectLang(text) : "ru";
-                curLang = lang;
-                if (!"ru".equals(lang)) {
-                    String t = text == null ? "" : text.trim();
-                    int letters = 0;
-                    for (int i = 0; i < t.length(); i++) if (Character.isLetter(t.charAt(i))) letters++;
-                    if (letters <= 1) return;   // ASR tail noise, same rule as handlePhraseZh
-                    lastText = t;
-                    Log.i(TAG, "ASR final (" + lang + ", zone " + wakeZone + "): " + t);
-                    // Uzbek has an OFFLINE command mapper (Uz2Ru → ru2zh, unit-tested against the whole
-                    // Russian suite): a known car command actuates without the backend, like Russian.
-                    if ("uz".equals(lang)) {
-                        String zh = Uz2Ru.uz2zh(t, wakeZone);
-                        if (zh != null) { noteInjected(t, zh, 1); Log.i(TAG, "uz2zh: [" + t + "] -> " + zh); injectZh(zh); return; }
-                    }
-                    if (OFFLINE_ONLY) showOnScreen("Не поняла команду", TYPE_FEEDBACK);
-                    else sendToCloud(t);
-                    return;
-                }
-                String query = chooseQuery(text == null ? "" : text); // raw, then fuzzyFix
-                if (query != null && !query.isEmpty()) {
-                    lastText = query;   // so swap()/CloudNlu surface our RU text, never the native Chinese
-                    Log.i(TAG, "RU ASR final (zone " + wakeZone + "): " + query);
-                    // NO own on-screen echo here: the stock SR path already displays the recognized
-                    // phrase (its PgsBean text is swapped to lastText). A second echo (TYPE_NLP,
-                    // capitalized) rendered alongside the stock TYPE_PGS one and the widget's scroll
-                    // visually merged them into a doubled prefix ("Вквключи музыку"). One source only.
-                    handlePhraseZh(query); // ru2zh → stock NLU pipeline
-                }
+                // ASYNC decode: the offline CTC pass costs 100 ms … ~2.8 s for a long buffer and used to
+                // run ON the SR callback thread, so SrSession.stopRecognize — i.e. the steering-wheel
+                // key OFF / end of utterance — stayed blocked for the whole decode ("stuck" button).
+                // GigaAsr.finish() snapshots + resets the buffer under its own lock, so the worker never
+                // races the next utterance's chunks; everything downstream (injectZh) is thread-safe too.
+                final Object sess = session;
+                new Thread(new Runnable() { public void run() { decodeAndAct(sess); } }, "stand-ru-asr").start();
             }
         } catch (Throwable t) { Log.e(TAG, "feedGigaam", t); }
+    }
+
+    /** Off-the-callback half of feedGigaam: decode the accumulated utterance, then actuate. */
+    private static void decodeAndAct(Object session) {
+        try {
+            wakeZone = currentDirect(session, wakeZone); // which seat spoke
+            String text = com.stand.asr.GigaAsr.finish();
+            if (text != null && !text.isEmpty()) Log.i(TAG, "RU ASR (GigaAM): " + text);
+            // Multilingual build: a non-Russian phrase (kk/ky/uz/en) has no ru2zh mapping and MUST
+            // NOT pass through fuzzyFix (a Kazakh word one edit away from a Russian command word would
+            // be "corrected" into an actuation). It goes straight to the backend, tagged with its
+            // language; the backend answers in that language and may still return car commands.
+            String lang = com.stand.asr.GigaAsr.multilingual() ? com.stand.asr.GigaAsr.detectLang(text) : "ru";
+            curLang = lang;
+            if (!"ru".equals(lang)) {
+                String t = text == null ? "" : text.trim();
+                int letters = 0;
+                for (int i = 0; i < t.length(); i++) if (Character.isLetter(t.charAt(i))) letters++;
+                if (letters <= 1) return;   // ASR tail noise, same rule as handlePhraseZh
+                lastText = t;
+                Log.i(TAG, "ASR final (" + lang + ", zone " + wakeZone + "): " + t);
+                // Uzbek has an OFFLINE command mapper (Uz2Ru → ru2zh, unit-tested against the whole
+                // Russian suite): a known car command actuates without the backend, like Russian.
+                if ("uz".equals(lang)) {
+                    String zh = Uz2Ru.uz2zh(t, wakeZone);
+                    if (zh != null) { noteInjected(t, zh, 1); Log.i(TAG, "uz2zh: [" + t + "] -> " + zh); injectZh(zh); return; }
+                }
+                if (OFFLINE_ONLY) showOnScreen("Не поняла команду", TYPE_FEEDBACK);
+                else sendToCloud(t);
+                return;
+            }
+            String query = chooseQuery(text == null ? "" : text); // raw, then fuzzyFix
+            if (query != null && !query.isEmpty()) {
+                lastText = query;   // so swap()/CloudNlu surface our RU text, never the native Chinese
+                showOnScreen(cap(query), TYPE_NLP);
+                Log.i(TAG, "RU ASR final (zone " + wakeZone + "): " + query);
+                handlePhraseZh(query); // ru2zh → stock NLU pipeline
+            }
+        } catch (Throwable t) { Log.e(TAG, "decodeAndAct", t); }
     }
 
     /** Speak text via the assistant's TTS engine. */
@@ -538,12 +557,26 @@ public final class RuBridge {
         } catch (Throwable t) { Log.e(TAG, "keyWakeTest", t); }
     }
 
+    /** Speak via the platform's global TTS client. Q07/C798: com.incall.apps.speechassistant.tts.
+     *  GlobalTtsClient; A06/C390: com.changan.speech.tts.GlobalTtsClient — both expose
+     *  getInstance() + startPlayAuto(String), so try ours first, fall back to the A06 path. */
+    private static final String[] TTS_CLIENT_CLASSES = {
+        "com.incall.apps.speechassistant.tts.GlobalTtsClient",   // Q07 (C798)
+        "com.changan.speech.tts.GlobalTtsClient",                // A06 (C390)
+    };
+
     private static void speak(String text) {
-        try {
-            Class<?> tc = Class.forName("com.changan.speech.tts.GlobalTtsClient");
-            Object tts = tc.getMethod("getInstance").invoke(null);
-            tc.getMethod("startPlayAuto", String.class).invoke(tts, text);
-        } catch (Throwable t) { Log.e(TAG, "speak", t); }
+        for (String cn : TTS_CLIENT_CLASSES) {
+            try {
+                Class<?> tc = Class.forName(cn);
+                Object tts = tc.getMethod("getInstance").invoke(null);
+                tc.getMethod("startPlayAuto", String.class).invoke(tts, text);
+                return;
+            } catch (ClassNotFoundException e) {
+                // not this platform's path — try the next one
+            } catch (Throwable t) { Log.e(TAG, "speak", t); return; }
+        }
+        Log.w(TAG, "speak: no GlobalTtsClient found (neither Q07 nor A06 path)");
     }
 
     // Assistant text-bar states (PgsSwitcherView `type`), matching the stock voice UI:
@@ -558,13 +591,21 @@ public final class RuBridge {
      *  voice UI uses the very same Intent (NotifierUtil.notifyTextChanged). */
     static void showOnScreen(String text, int type) {
         try {
-            if (appCtx == null || text == null || text.isEmpty()) return;
+            if (appCtx == null || text == null) return;
+            text = text.replaceAll("^[.\\u2026\\u22ef\\s]+", "").trim();
+            if (text.isEmpty()) return;
             Intent it = new Intent("com.incall.action.UPDATE_TEXT");
+            java.util.ArrayList<String> list = new java.util.ArrayList<>();
+            list.add(text);
             it.putExtra("text", text);
-            it.putExtra("type", type);
+            it.putExtra("textList", list);
+            it.putExtra("tips", "");
+            it.putExtra("direct", wakeZone);
             it.putExtra("level", 1);            // LEVEL_HIGH
+            it.putExtra("type", type);
+            it.putExtra("time", 5000);
             if (type == TYPE_GUIDE) it.putExtra("scroll", true);
-            it.addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES);
+            it.addFlags(0x20);                  // FLAG_RECEIVER_FOREGROUND
             appCtx.sendBroadcast(it);
         } catch (Throwable t) { Log.e(TAG, "showOnScreen", t); }
     }
@@ -577,6 +618,36 @@ public final class RuBridge {
 
     private static boolean hasCJK(String s) { for (int i=0;i<s.length();i++){char c=s.charAt(i); if(c>=0x4E00&&c<=0x9FFF) return true;} return false; }
     private static boolean hasCyrillic(String s) { for (int i=0;i<s.length();i++){char c=s.charAt(i); if(c>=0x0400&&c<=0x04FF) return true;} return false; }
+
+    /** Filter out Chinese UI notifications and partial dictation (type 1) */
+    public static boolean filterShowText(Object info) {
+        if (info == null) return false;
+        try {
+            Class<?> c = info.getClass();
+            java.lang.reflect.Field ft = c.getField("type");
+            int type = ft.getInt(info);
+            if (type == 1) return false;
+
+            java.lang.reflect.Field fText = c.getField("text");
+            Object textObj = fText.get(info);
+            if (textObj != null && hasCJK(textObj.toString())) return false;
+
+            java.lang.reflect.Field fTips = c.getField("tips");
+            Object tipsObj = fTips.get(info);
+            if (tipsObj != null && hasCJK(tipsObj.toString())) return false;
+
+            java.lang.reflect.Field fList = c.getField("textList");
+            Object listObj = fList.get(info);
+            if (listObj instanceof java.util.List) {
+                for (Object item : (java.util.List<?>) listObj) {
+                    if (item != null && hasCJK(item.toString())) return false;
+                }
+            }
+        } catch (Throwable t) {
+            Log.e(TAG, "filterShowText", t);
+        }
+        return true;
+    }
 
     /** A TTS request our engine must IGNORE: Chinese to be spoken (CJK present, no Cyrillic). By owner's
      *  request our TTS never voices Chinese — a pure-CJK stock NLG reply is dropped silently rather than
@@ -816,7 +887,10 @@ public final class RuBridge {
             String ru;
             if (hasCJK(text)) {                       // still Chinese (not overlaid) → translate
                 ru = zh2ru(text);
-                if (ru == null) return false;         // unknown Chinese → stock plays it
+                if (ru == null) {
+                    Log.w(TAG, "TTS unknown Chinese: [" + text + "] -> fallback: Готово");
+                    ru = "Готово";
+                }
                 Log.i(TAG, "TTS ZH->RU: [" + text + "] -> " + ru);
             } else if (hasCyrillic(text)) {           // already Russian (overlays) → voice with Piper
                 ru = text;
@@ -826,13 +900,36 @@ public final class RuBridge {
             // NB: do NOT push the answer to the widget here — the stock UI already renders it (the
             // russified NLG text). A duplicate showOnScreen leaves the previous answer lingering and
             // it flashes for a frame at the next dictation. We only replace the VOICE, not the UI.
-            callListener(listener, "onStartState", int.class, Integer.valueOf(0));
+            isTtsSpeaking = true;
             callListener(listener, "onPlayBegin", String.class, ru);
             com.stand.tts.TeraTts.speak(ru, new Runnable() { public void run() {
+                isTtsSpeaking = false;
+                lastTtsEndTime = System.currentTimeMillis();
                 callListener(listener, "onPlayComplete", null, null);
+                onTtsFinished();
             }});
             return true;
         } catch (Throwable t) { Log.e(TAG, "onTtsText", t); return false; }
+    }
+
+    public static void onTtsFinished() {
+        try {
+            Class<?> bc = Class.forName("com.incall.apps.speechassistant.controller.BusinessController");
+            Object inst = bc.getMethod("getInstance").invoke(null);
+            bc.getMethod("refreshTimer", long.class).invoke(inst, 15000L);
+            Log.i(TAG, "onTtsFinished: refreshed sleep timer (15s)");
+
+            Class<?> vc = Class.forName("com.incall.apps.speechassistant.common.VoiceStateCache");
+            boolean awake = (Boolean) vc.getMethod("isWakeUp").invoke(null) || (Boolean) vc.getMethod("isOutSide").invoke(null);
+            if (awake) {
+                Class<?> sr = Class.forName("com.incall.apps.speechassistant.sr.SrSession");
+                Object srInst = sr.getMethod("getInstance").invoke(null);
+                sr.getMethod("startRecognize", int.class, boolean.class).invoke(srInst, wakeZone, false);
+                Log.i(TAG, "onTtsFinished: ensured recognition active (zone " + wakeZone + ")");
+            }
+        } catch (Throwable t) {
+            Log.e(TAG, "onTtsFinished", t);
+        }
     }
 
     private static void callListener(Object l, String method, Class<?> sig, Object arg) {
@@ -869,7 +966,7 @@ public final class RuBridge {
         String[][] zones = {{"主驾","Водитель"},{"副驾","Пассажир"},{"左后","Слева сзади"},
                             {"右后","Справа сзади"},{"中间","По центру"},{"后排","Сзади"}};
         for (String[] z : zones) if (s.startsWith(z[0])) { addr = z[1]; s = s.substring(z[0].length()); break; }
-        s = s.replaceAll("^[，、,。~\\s]+", "").replaceAll("[，。~\\s]+$", "");   // trim residual punct
+        s = s.replaceAll("^[.\\u2026\\u22ef，、,。~\\s]+", "").replaceAll("[，。~\\s]+$", "");   // trim residual punct
         // Stock refusals "X不支持语音控制" ("X is not voice-controllable") — e.g. door lock is blocked by
         // Changan at the DM level (controlDoorLockTask rejects 锁车). Voice a clear RU reason, not silence.
         if (s.contains("不支持语音控制")) {
@@ -914,15 +1011,40 @@ public final class RuBridge {
             case "这个知识点我已经记在小本本上啦": return "Записала это себе в блокнотик";
             case "这个问题暂时难住我啦~这就开启学习模式": return "Вопрос меня озадачил, включаю режим обучения";
             // --- command confirmations ---
-            case "好的": case "好的。": return "Хорошо";
+            case "好的": case "好的。": case "好嘞": case "好哒": case "收到": case "没问题": return "Хорошо";
+            case "马上就办": case "这就去办": case "这就为您办理": return "Выполняю";
             case "已为您打开": case "已打开": return "Включаю";
             case "已为您关闭": case "已关闭": return "Выключаю";
-            case "已经打开了哦": return "Уже включено";
-            case "已经关闭了哦": return "Уже выключено";
+            case "已经打开了哦": case "已经打开了": return "Уже включено";
+            case "已经关闭了哦": case "已经关闭了": return "Уже выключено";
             case "没有找到相关资源哦": return "Ничего не нашла";
             case "当前没有播放歌曲哦": return "Сейчас ничего не играет";
             case "请先驻车后再试": case "请先驻车后再试一下": return "Сначала остановите машину";
             case "咱们车没有这个功能哦": case "车辆无此功能呢": return "В этой машине нет такой функции";
+        }
+        if (s.startsWith("已为您打开") || s.startsWith("正在为您打开") || s.startsWith("为您打开") || s.startsWith("已打开")) {
+            if (s.contains("窗")) return "Открываю окно";
+            if (s.contains("天窗") || s.contains("顶")) return "Открываю люк";
+            if (s.contains("门") || s.contains("锁")) return "Открываю";
+            if (s.contains("空调")) return "Включаю климат";
+            if (s.contains("热")) return "Включаю подогрев";
+            if (s.contains("风")) return "Включаю вентиляцию";
+            return "Включаю";
+        }
+        if (s.startsWith("已为您关闭") || s.startsWith("正在为您关闭") || s.startsWith("为您关闭") || s.startsWith("已关闭")) {
+            if (s.contains("窗")) return "Закрываю окно";
+            if (s.contains("天窗") || s.contains("顶")) return "Закрываю люк";
+            if (s.contains("门") || s.contains("锁")) return "Закрываю";
+            if (s.contains("空调")) return "Выключаю климат";
+            if (s.contains("热")) return "Выключаю подогрев";
+            if (s.contains("风")) return "Выключаю";
+            return "Выключаю";
+        }
+        if (s.startsWith("已为您设置") || s.startsWith("已为您调节") || s.startsWith("已为您调到") || s.startsWith("正在为您调节")) {
+            return "Настраиваю";
+        }
+        if (s.startsWith("已为您") || s.startsWith("正在为您") || s.startsWith("为您") || s.startsWith("这就为您")) {
+            return "Готово";
         }
         // templated: "…温度…26…度" → temperature confirmation with the number
         java.util.regex.Matcher m = java.util.regex.Pattern.compile("(\\d{1,3})").matcher(s);
@@ -933,8 +1055,8 @@ public final class RuBridge {
         if (s.contains("座椅通风")) return "Включаю вентиляцию сиденья" + (num != null ? " " + num : "");
         if (s.contains("车窗")) return s.contains("关") ? "Закрываю окно" : "Открываю окно";
         if (s.contains("空调")) return s.contains("关") ? "Выключаю климат" : "Включаю климат";
-        if (s.contains("好的")) return "Готово";
-        return null; // unknown → stock Chinese fallback
+        if (s.contains("好") || s.contains("完成") || s.contains("成功")) return "Готово";
+        return null;
     }
 
     /** Subtitle of what's being spoken now (avatar/TTS channel), like the stock UI. */
@@ -1112,8 +1234,13 @@ public final class RuBridge {
                     showOnScreen(display, TYPE_FEEDBACK); // answer message on the assistant widget
                     showTtsSubtitle(display);             // spoken-subtitle channel (avatar/TTS)
                 }
+                boolean hasCommands = (zhCmds != null && zhCmds.length() > 0) || (nlu != null && nlu.length() > 0);
                 if (!audio.isEmpty()) playPcm(audio);      // RU speech pre-synthesized by our backend
-                else if (!spoken.isEmpty()) speak(spoken);  // else our on-device Tera TTS (RU), '+' consumed
+                else if (!spoken.isEmpty()) {
+                    if (!hasCommands || !followup.isEmpty()) {
+                        speak(spoken);  // else our on-device Tera TTS (RU), '+' consumed
+                    }
+                }
                 // record this exchange for multi-turn context (clean text, no '+' stress marks)
                 recordTurn(text, stripStress(!followup.isEmpty() ? followup : answer));
             } catch (Throwable t) {
@@ -1535,18 +1662,36 @@ public final class RuBridge {
 
     /** Ensure the assistant counts as "awake" (VoiceStateCache.sVwState != 0) so FreeWakeManager
      *  lets a non-whitelisted command through. Only forces when currently asleep (0) — a real knob
-     *  wake already set it, so we don't disturb that. state = wake direction (1..5). */
+     *  wake already set it, so we don't disturb that. state = wake direction (1..5).
+     *  The class moved between platforms — Q07/C798 keeps it in com.incall.apps.speechassistant.common,
+     *  A06/C390 in com.incall.apps.voicebase.consts.common — so try both (field sVwState: AtomicInteger). */
+    private static final String[] VW_CLASSES = {
+        "com.incall.apps.speechassistant.common.VoiceStateCache",     // Q07 (C798)
+        "com.incall.apps.voicebase.consts.common.VoiceStateCache",    // A06 (C390)
+    };
+
     private static void forceWakeIfAsleep(int zone) {
-        try {
-            Class<?> c = Class.forName("com.incall.apps.voicebase.consts.common.VoiceStateCache");
-            java.lang.reflect.Field f = c.getDeclaredField("sVwState");
-            f.setAccessible(true);
-            java.util.concurrent.atomic.AtomicInteger ai = (java.util.concurrent.atomic.AtomicInteger) f.get(null);
-            if (ai != null && ai.get() == 0) {
-                ai.set((zone >= 1 && zone <= 5) ? zone : 1);
-                Log.i(TAG, "forceWake: sVwState set to " + ai.get());
-            }
-        } catch (Throwable t) { Log.e(TAG, "forceWake", t); }
+        for (String cn : VW_CLASSES) {
+            try {
+                Class<?> c = Class.forName(cn);
+                java.lang.reflect.Field f = c.getDeclaredField("sVwState");
+                f.setAccessible(true);
+                java.util.concurrent.atomic.AtomicInteger ai = (java.util.concurrent.atomic.AtomicInteger) f.get(null);
+                if (ai != null && ai.get() == 0) {
+                    int wakeState = zone;
+                    try {
+                        wakeState = (Integer) c.getMethod("getWakeState", int.class).invoke(null, zone);
+                    } catch (Throwable ignored) {}
+                    if (wakeState <= 0) wakeState = (zone >= 1 ? zone : 1);
+                    ai.set(wakeState);
+                    Log.i(TAG, "forceWake: sVwState set to " + ai.get() + " via " + cn);
+                }
+                return;   // class found → done (never touch a second copy)
+            } catch (ClassNotFoundException e) {
+                // not this platform's path — try the next one
+            } catch (Throwable t) { Log.e(TAG, "forceWake", t); return; }
+        }
+        Log.w(TAG, "forceWake: VoiceStateCache not found (neither Q07 nor A06 path)");
     }
 
     /** True only in the app's main process (secondary processes lack a ready NLU pipeline). */
@@ -1613,10 +1758,18 @@ public final class RuBridge {
             int sr = 16000;
             int min = android.media.AudioTrack.getMinBufferSize(sr,
                 android.media.AudioFormat.CHANNEL_OUT_MONO, android.media.AudioFormat.ENCODING_PCM_16BIT);
-            android.media.AudioTrack at = new android.media.AudioTrack(
-                android.media.AudioManager.STREAM_MUSIC, sr,
-                android.media.AudioFormat.CHANNEL_OUT_MONO, android.media.AudioFormat.ENCODING_PCM_16BIT,
-                Math.max(min, pcm.length), android.media.AudioTrack.MODE_STREAM);
+            android.media.AudioAttributes attrs = new android.media.AudioAttributes.Builder()
+                    .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .setUsage(android.media.AudioAttributes.USAGE_ASSISTANT)
+                    .build();
+            android.media.AudioFormat fmt = new android.media.AudioFormat.Builder()
+                    .setSampleRate(sr)
+                    .setChannelMask(android.media.AudioFormat.CHANNEL_OUT_MONO)
+                    .setEncoding(android.media.AudioFormat.ENCODING_PCM_16BIT)
+                    .build();
+            android.media.AudioTrack at = new android.media.AudioTrack(attrs, fmt,
+                    Math.max(min, pcm.length), android.media.AudioTrack.MODE_STREAM,
+                    android.media.AudioManager.AUDIO_SESSION_ID_GENERATE);
             at.play();
             at.write(pcm, 0, pcm.length);
             long ms = (long) (pcm.length / 2.0 / sr * 1000) + 300;
@@ -1675,12 +1828,38 @@ public final class RuBridge {
         "сколько осталось заряда", "какой запас хода", "проверь давление в шинах"
     };
 
-    /** Read SrBaseSession.getCurrentDirect() on the session object (which seat woke SR). */
+    /** Read SrBaseSession.getCurrentDirect() on the session object (which seat woke SR), or VoiceStateCache. */
     private static int currentDirect(Object session, int fallback) {
         try {
-            Object v = session.getClass().getMethod("getCurrentDirect").invoke(session);
-            int d = ((Number) v).intValue();
-            return (d >= 1 && d <= 5) ? d : fallback;
+            if (session != null) {
+                try {
+                    Object v = session.getClass().getMethod("getCurrentDirect").invoke(session);
+                    int d = ((Number) v).intValue();
+                    if (d >= 1 && d <= 5) return d;
+                    if (d >= 16) return d;
+                } catch (Throwable ignored) {}
+            }
+            for (String cn : VW_CLASSES) {
+                try {
+                    Class<?> vc = Class.forName(cn);
+                    int vw = (Integer) vc.getMethod("getVwState").invoke(null);
+                    try {
+                        int dir = (Integer) vc.getMethod("getWakeDirection", int.class).invoke(null, vw);
+                        if (dir >= 1 && dir <= 5) return dir;
+                        if (dir >= 16) return dir;
+                    } catch (Throwable ignored) {}
+                    if (vw >= 1 && vw <= 5) return vw;
+                    if (vw == 9) return 1;
+                    if (vw == 10) return 2;
+                    if (vw == 11) return 3;
+                    if (vw == 12) return 4;
+                    if (vw == 13) return 5;
+                    if (vw >= 16 && vw < 24) return vw;
+                    if (vw >= 24 && vw <= 28) return vw - 8;
+                    break;
+                } catch (ClassNotFoundException ignored) {}
+            }
+            return fallback;
         } catch (Throwable t) { return fallback; }
     }
     public static Object ruGuideSleep() { return ruGuide(); }
@@ -2337,6 +2516,24 @@ public final class RuBridge {
         return t;
     }
 
+    public static String getDirectName(int zone) {
+        switch (zone) {
+            case 1: return "left";
+            case 2: return "right";
+            case 3: return "rear_left";
+            case 4: return "rear_right";
+            case 5: return "rear_mid";
+            case 16: return "out_all";
+            case 17: return "out_front";
+            case 18: return "out_back";
+            case 19: return "out_left";
+            case 20: return "out_right";
+            default:
+                if (zone >= 16) return "out_all";
+                return "left";
+        }
+    }
+
     private static String arbFlat(String rid, String query, String domain, String intent,
                                   java.util.Map<String,String> slots) {
         try {
@@ -2348,8 +2545,9 @@ public final class RuBridge {
                 arr.put(new JSONObject().put("name", e.getKey())
                         .put("value", e.getValue()).put("normalizedValue", e.getValue()));
             }
-            nlu.put("slots", arr);                                    // list form: GSON/DM read this
+            String dirStr = getDirectName(wakeZone);
             return new JSONObject().put("query", query).put("requestId", rid).put("nluType", 0).put("zoneId", wakeZone)
+                    .put("direction", dirStr)
                     .put("nluResults", new org.json.JSONArray().put(nlu)).toString();
         } catch (Throwable e) { return null; }
     }
