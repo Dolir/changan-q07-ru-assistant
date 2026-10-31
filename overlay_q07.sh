@@ -28,5 +28,8 @@ else
   "${ADB[@]}" shell chmod 700 "$DIR"
 fi
 
-"${ADB[@]}" shell am force-stop "$PKG"
+# Не force-stop: после него ассистент сам не поднимается
+PID="$("${ADB[@]}" shell pidof "$PKG" | tr -d '\r')"
+[ -n "$PID" ] && "${ADB[@]}" shell kill $PID
+"${ADB[@]}" shell am startservice -n "$PKG/.service.SpeechClientService" >/dev/null
 echo "[overlay_q07] готово, ассистент перезапущен"

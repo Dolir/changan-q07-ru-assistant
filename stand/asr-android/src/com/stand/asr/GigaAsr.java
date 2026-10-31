@@ -180,7 +180,6 @@ public final class GigaAsr {
 
     /** Middle chunks: append raw 16-bit LE PCM and keep ring-buffer. */
     public static void accept(byte[] pcm, int len) {
-        if (com.stand.bridge.RuBridge.isTtsSpeaking()) return;
         if (pcm == null || len <= 0) return;
         int act = Math.min(len, pcm.length);
         synchronized (buf) {

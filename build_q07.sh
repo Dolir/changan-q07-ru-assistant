@@ -162,14 +162,6 @@ open(ft_path, 'w', encoding='utf-8').write(
     '.end method\n\n'
     '.method private static declared-synchronized doFeed()V\n'
     '    .registers 7\n'
-    '    invoke-static {}, Lcom/stand/bridge/RuBridge;->isTtsSpeaking()Z\n'
-    '    move-result v0\n'
-    '    if-eqz v0, :cond_feed_tts_ok\n'
-    '    const-string v0, "FeedTask"\n'
-    '    const-string v1, "doFeed skipped: assistant is speaking TTS"\n'
-    '    invoke-static {v0, v1}, Landroid/util/Log;->i(Ljava/lang/String;Ljava/lang/String;)I\n'
-    '    return-void\n'
-    '    :cond_feed_tts_ok\n'
     '    invoke-static {}, Lcom/incall/apps/speechassistant/common/VoiceStateCache;->isWakeUp()Z\n'
     '    move-result v0\n'
     '    if-nez v0, :cond_feed_ok\n'
@@ -215,9 +207,6 @@ repl(
      "    invoke-virtual {v1, v0}, Ljava/lang/String;->equals(Ljava/lang/Object;)Z\n"
      "    move-result v1\n"
      "    if-eqz v1, :stand_check_end\n"
-     "    invoke-static {}, Lcom/stand/bridge/RuBridge;->isTtsSpeaking()Z\n"
-     "    move-result v0\n"
-     "    if-eqz v0, :stand_no_vad\n"
      "    invoke-static {}, Lcom/stand/asr/FeedTask;->reset()V\n"
      "    invoke-static {}, Lcom/stand/asr/GigaAsr;->reset()V\n"
      "    const-string v0, \"STAND_VAD\"\n"
@@ -235,9 +224,6 @@ repl(
      "    if-nez v1, :stand_check_awake\n"
      "    goto :stand_no_vad\n"
      "    :stand_check_awake\n"
-     "    invoke-static {}, Lcom/stand/bridge/RuBridge;->isTtsSpeaking()Z\n"
-     "    move-result v0\n"
-     "    if-eqz v0, :stand_no_vad\n"
      "    invoke-static {}, Lcom/incall/apps/speechassistant/common/VoiceStateCache;->isWakeUp()Z\n"
      "    move-result v0\n"
      "    if-nez v0, :stand_check_outside\n"
@@ -258,14 +244,11 @@ repl(
      "    :stand_no_vad\n"),
     'SrSession.onSrMsg -> VAD speech_start/speech_end/timeout hooks')
 
-# (b) SeEngineProxy.process([BI)I -> downmix 8ch→mono + GigaAsr.accept (only when inside car and not TTS speaking)
+# (b) SeEngineProxy.process([BI)I -> downmix 8ch→mono + GigaAsr.accept (only when inside car)
 repl_reg(
     path('classes14','com','incall','apps','voiceservice','proxy','SeEngineProxy.smali'),
     r'(\.method public process\(\[BI\)I\n\s*\.registers \d+\n)',
-    ("    invoke-static {}, Lcom/stand/bridge/RuBridge;->isTtsSpeaking()Z\n"
-     "    move-result v0\n"
-     "    if-eqz v0, :cond_cabin_skip\n"
-     "    invoke-static {}, Lcom/incall/apps/speechassistant/common/VoiceStateCache;->isOutSide()Z\n"
+    ("    invoke-static {}, Lcom/incall/apps/speechassistant/common/VoiceStateCache;->isOutSide()Z\n"
      "    move-result v0\n"
      "    if-nez v0, :cond_cabin_skip\n"
      "    new-array v4, p2, [B\n"
@@ -439,9 +422,6 @@ if os.path.exists(op_path):
             "    .registers 12\n"
             "    .param p1, \"buffer\"    # [B\n"
             "    .param p2, \"length\"    # I\n\n"
-            "    invoke-static {}, Lcom/stand/bridge/RuBridge;->isTtsSpeaking()Z\n"
-            "    move-result v0\n"
-            "    if-eqz v0, :cond_out_dmx_skip\n"
             "    invoke-static {}, Lcom/incall/apps/speechassistant/common/VoiceStateCache;->isOutSide()Z\n"
             "    move-result v0\n"
             "    if-eqz v0, :cond_out_dmx_skip\n"
@@ -502,30 +482,12 @@ repl(
     ("    return-void\n"),
     'PgsController.updatePgs -> no-op')
 
-# (p) ITvwConvertor.getWake: when Distribution is "outside", ensure direct >= 16
-repl(
-    path('classes15','com','incall','apps','voiceservice','vw','convertor','ITvwConvertor.smali'),
-    r'(\.line 28\n\s*const-string v2, "nKeyword")',
-    ("    const-string v3, \"outside\"\n"
-     "    iget-object v2, v0, Lcom/incall/apps/voiceservice/vw/bean/VwBean;->distribution:Ljava/lang/String;\n"
-     "    invoke-virtual {v3, v2}, Ljava/lang/String;->equals(Ljava/lang/Object;)Z\n"
-     "    move-result v2\n"
-     "    if-eqz v2, :cond_not_outside\n"
-     "    iget v2, v0, Lcom/incall/apps/voiceservice/vw/bean/VwBean;->direct:I\n"
-     "    const/16 v3, 0x10\n"
-     "    if-ge v2, v3, :cond_not_outside\n"
-     "    iput v3, v0, Lcom/incall/apps/voiceservice/vw/bean/VwBean;->direct:I\n"
-     "    :cond_not_outside\n"
-     "    .line 28\n"
-     "    const-string v2, \"nKeyword\""),
-    'ITvwConvertor.getWake -> outside wake direction fix (direct >= 16)')
-
 print("  hooks done")
 PY
 
 # --------------------------------------------------------------- 3. собрать dex обратно
 echo "[4/7] smali -> dex (изменённые)"
-for w in classes33 classes29 classes28 classes26 classes24 classes23 classes21 classes20 classes19 classes18 classes15 classes14 classes11; do
+for w in classes33 classes29 classes28 classes26 classes24 classes23 classes21 classes20 classes19 classes18 classes14 classes11; do
   if [ -d "$BDIR/smali/$w" ]; then
     java -jar "$HERE/tools/smali.jar" a --api 30 "$BDIR/smali/$w" -o "$BDIR/dex/$w.dex"
     echo "  пересобран $w.dex"
@@ -556,19 +518,19 @@ fi
 echo "[6/7] собираю APK"
 cp "$Q07" "$BDIR/new.apk"
 # удалить старые изменённые dex (чтобы заменить на новые)
-for w in classes33 classes29 classes28 classes26 classes24 classes23 classes21 classes20 classes19 classes18 classes15 classes14 classes11; do
+for w in classes33 classes29 classes28 classes26 classes24 classes23 classes21 classes20 classes19 classes18 classes14 classes11; do
   "$SEVENZ" d "$BDIR/new.apk" "$w.dex" >/dev/null 2>&1 || true
 done
 # 1) собираем плоский каталог (dex в корне, lib/assets с путями)
 FLAT="$BDIR/flat"; rm -rf "$FLAT"; mkdir -p "$FLAT"
 cp "$BDIR/dex/classes33.dex" "$BDIR/dex/classes29.dex" "$BDIR/dex/classes28.dex" "$BDIR/dex/classes26.dex" "$BDIR/dex/classes24.dex" "$BDIR/dex/classes23.dex" \
-   "$BDIR/dex/classes21.dex" "$BDIR/dex/classes20.dex" "$BDIR/dex/classes19.dex" "$BDIR/dex/classes18.dex" "$BDIR/dex/classes15.dex" "$BDIR/dex/classes14.dex" "$BDIR/dex/classes11.dex" \
+   "$BDIR/dex/classes21.dex" "$BDIR/dex/classes20.dex" "$BDIR/dex/classes19.dex" "$BDIR/dex/classes18.dex" "$BDIR/dex/classes14.dex" "$BDIR/dex/classes11.dex" \
    "$BDIR/classes35.dex" "$BDIR/classes36.dex" "$FLAT/"
 cp -r "$BDIR/lib" "$FLAT/lib"
 cp -r "$BDIR/assets" "$FLAT/assets"
 # 2) dex в корень
 ( cd "$FLAT" && "$SEVENZ" a -tzip "$BDIR/new.apk" classes33.dex classes29.dex classes28.dex classes26.dex classes24.dex classes23.dex \
-    classes21.dex classes20.dex classes19.dex classes18.dex classes15.dex classes14.dex classes11.dex classes35.dex classes36.dex >/dev/null 2>&1 ) || true
+    classes21.dex classes20.dex classes19.dex classes18.dex classes14.dex classes11.dex classes35.dex classes36.dex >/dev/null 2>&1 ) || true
 # 3) lib БЕЗ сжатия (STORED) — критично для extractNativeLibs
 ( cd "$FLAT" && "$SEVENZ" a -tzip -mx=0 "$BDIR/new.apk" lib >/dev/null 2>&1 ) || true
 # 4) assets с сжатием (модели onnx уже сжаты slавлно)

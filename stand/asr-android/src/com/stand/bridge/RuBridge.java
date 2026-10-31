@@ -27,7 +27,7 @@ import static com.stand.bridge.Ru2Zh.*;
 public final class RuBridge {
     private static final String TAG = "RuBridge";
     /** Bump with every published dex: the log shows which code actually runs. */
-    private static final String CODE_VERSION = "q07-1";
+    private static final String CODE_VERSION = "q07-2";
 
 
     // Stock TTS-engine registry (world-writable dir; the app runs as uid=system). Registering our
@@ -207,19 +207,19 @@ public final class RuBridge {
      *  `lang`. Only the multilingual build (GigaAM-Multilingual, GIGAAM_ML=1) ever sets it to non-"ru". */
     static volatile String curLang = "ru";
     private static volatile int wakeZone = 1;        // detected speaking zone (SrBaseSession.getCurrentDirect: 1=driver,2=passenger,3/4=rear,5=rear-mid)
-    public static volatile boolean isTtsSpeaking = false;
-    private static volatile long lastTtsEndTime = 0;
-    public static boolean isTtsSpeaking() {
-        return isTtsSpeaking || (System.currentTimeMillis() - lastTtsEndTime < 600);
-    }
     // Force offline: online chat backend isn't ready, so unrecognized phrases give a local RU reply
     // instead of hitting the cloud. Flip to false once the LLM backend is live.
-    private static final boolean OFFLINE_ONLY = false;  // ONLINE: free-form chat/knowledge → our backend (sda.tecrow.org)
+    /** The OpenQiyuan switch «Отправка диагностики». Off by default: nothing leaves the car for sda.tecrow.org. */
+    private static final String DIAGNOSTICS_SETTING = "openqiyuan_assistant_diagnostics";
+    private static boolean offlineOnly() {
+        try { return android.provider.Settings.Global.getInt(appCtx.getContentResolver(), DIAGNOSTICS_SETTING, 0) == 0; }
+        catch (Throwable t) { return true; }
+    }
 
     // Online conversational path via the NATIVE (device-signed) Dubhe cloud + MyMemory translation:
     // a free-form phrase the rule-based ru2zh can't map is translated RU->ZH (MyMemory) and injected
     // into the stock NLU, which consults the real Changan cloud; the Chinese answer is turned back to
-    // Russian on the way out. Independent of OFFLINE_ONLY (that only gates the dead 127.0.0.1 backend).
+    // Russian on the way out. Independent of offlineOnly() (that only gates the dead 127.0.0.1 backend).
     // Our backend answers in Russian and understands Russian, so no MyMemory RU<->ZH is needed on the
     // server path. ru2zh still maps COMMANDS to Chinese for the stock LOCAL NLU (injectZh) — that stays.
     private static final boolean CLOUD_MT = false;
@@ -487,10 +487,6 @@ public final class RuBridge {
      *  No streaming/partials — the stock SR gives clean start/end, so no VAD is needed. */
     private static void feedGigaam(Object session, long wp, byte[] pcm) {
         try {
-            if (isTtsSpeaking()) {
-                if (wp == 1) com.stand.asr.GigaAsr.reset();
-                return;
-            }
             if (wp == 1) { com.stand.asr.GigaAsr.reset(); lastText = ""; }
             if (pcm != null && pcm.length > 0) com.stand.asr.GigaAsr.accept(pcm, pcm.length);
             if (wp == 3) {
@@ -530,7 +526,7 @@ public final class RuBridge {
                     String zh = Uz2Ru.uz2zh(t, wakeZone);
                     if (zh != null) { noteInjected(t, zh, 1); Log.i(TAG, "uz2zh: [" + t + "] -> " + zh); injectZh(zh); return; }
                 }
-                if (OFFLINE_ONLY) showOnScreen("Не поняла команду", TYPE_FEEDBACK);
+                if (offlineOnly()) showOnScreen("Не поняла команду", TYPE_FEEDBACK);
                 else sendToCloud(t);
                 return;
             }
@@ -890,10 +886,7 @@ public final class RuBridge {
             String ru;
             if (hasCJK(text)) {                       // still Chinese (not overlaid) → translate
                 ru = zh2ru(text);
-                if (ru == null) {
-                    Log.w(TAG, "TTS unknown Chinese: [" + text + "] -> fallback: Готово");
-                    ru = "Готово";
-                }
+                if (ru == null) return false;         // unknown Chinese → stock plays it
                 Log.i(TAG, "TTS ZH->RU: [" + text + "] -> " + ru);
             } else if (hasCyrillic(text)) {           // already Russian (overlays) → voice with Piper
                 ru = text;
@@ -903,36 +896,13 @@ public final class RuBridge {
             // NB: do NOT push the answer to the widget here — the stock UI already renders it (the
             // russified NLG text). A duplicate showOnScreen leaves the previous answer lingering and
             // it flashes for a frame at the next dictation. We only replace the VOICE, not the UI.
-            isTtsSpeaking = true;
+            callListener(listener, "onStartState", int.class, Integer.valueOf(0));
             callListener(listener, "onPlayBegin", String.class, ru);
             com.stand.tts.TeraTts.speak(ru, new Runnable() { public void run() {
-                isTtsSpeaking = false;
-                lastTtsEndTime = System.currentTimeMillis();
                 callListener(listener, "onPlayComplete", null, null);
-                onTtsFinished();
             }});
             return true;
         } catch (Throwable t) { Log.e(TAG, "onTtsText", t); return false; }
-    }
-
-    public static void onTtsFinished() {
-        try {
-            Class<?> bc = Class.forName("com.incall.apps.speechassistant.controller.BusinessController");
-            Object inst = bc.getMethod("getInstance").invoke(null);
-            bc.getMethod("refreshTimer", long.class).invoke(inst, 15000L);
-            Log.i(TAG, "onTtsFinished: refreshed sleep timer (15s)");
-
-            Class<?> vc = Class.forName("com.incall.apps.speechassistant.common.VoiceStateCache");
-            boolean awake = (Boolean) vc.getMethod("isWakeUp").invoke(null) || (Boolean) vc.getMethod("isOutSide").invoke(null);
-            if (awake) {
-                Class<?> sr = Class.forName("com.incall.apps.speechassistant.sr.SrSession");
-                Object srInst = sr.getMethod("getInstance").invoke(null);
-                sr.getMethod("startRecognize", int.class, boolean.class).invoke(srInst, wakeZone, false);
-                Log.i(TAG, "onTtsFinished: ensured recognition active (zone " + wakeZone + ")");
-            }
-        } catch (Throwable t) {
-            Log.e(TAG, "onTtsFinished", t);
-        }
     }
 
     private static void callListener(Object l, String method, Class<?> sig, Object arg) {
@@ -1014,40 +984,15 @@ public final class RuBridge {
             case "这个知识点我已经记在小本本上啦": return "Записала это себе в блокнотик";
             case "这个问题暂时难住我啦~这就开启学习模式": return "Вопрос меня озадачил, включаю режим обучения";
             // --- command confirmations ---
-            case "好的": case "好的。": case "好嘞": case "好哒": case "收到": case "没问题": return "Хорошо";
-            case "马上就办": case "这就去办": case "这就为您办理": return "Выполняю";
+            case "好的": case "好的。": return "Хорошо";
             case "已为您打开": case "已打开": return "Включаю";
             case "已为您关闭": case "已关闭": return "Выключаю";
-            case "已经打开了哦": case "已经打开了": return "Уже включено";
-            case "已经关闭了哦": case "已经关闭了": return "Уже выключено";
+            case "已经打开了哦": return "Уже включено";
+            case "已经关闭了哦": return "Уже выключено";
             case "没有找到相关资源哦": return "Ничего не нашла";
             case "当前没有播放歌曲哦": return "Сейчас ничего не играет";
             case "请先驻车后再试": case "请先驻车后再试一下": return "Сначала остановите машину";
             case "咱们车没有这个功能哦": case "车辆无此功能呢": return "В этой машине нет такой функции";
-        }
-        if (s.startsWith("已为您打开") || s.startsWith("正在为您打开") || s.startsWith("为您打开") || s.startsWith("已打开")) {
-            if (s.contains("窗")) return "Открываю окно";
-            if (s.contains("天窗") || s.contains("顶")) return "Открываю люк";
-            if (s.contains("门") || s.contains("锁")) return "Открываю";
-            if (s.contains("空调")) return "Включаю климат";
-            if (s.contains("热")) return "Включаю подогрев";
-            if (s.contains("风")) return "Включаю вентиляцию";
-            return "Включаю";
-        }
-        if (s.startsWith("已为您关闭") || s.startsWith("正在为您关闭") || s.startsWith("为您关闭") || s.startsWith("已关闭")) {
-            if (s.contains("窗")) return "Закрываю окно";
-            if (s.contains("天窗") || s.contains("顶")) return "Закрываю люк";
-            if (s.contains("门") || s.contains("锁")) return "Закрываю";
-            if (s.contains("空调")) return "Выключаю климат";
-            if (s.contains("热")) return "Выключаю подогрев";
-            if (s.contains("风")) return "Выключаю";
-            return "Выключаю";
-        }
-        if (s.startsWith("已为您设置") || s.startsWith("已为您调节") || s.startsWith("已为您调到") || s.startsWith("正在为您调节")) {
-            return "Настраиваю";
-        }
-        if (s.startsWith("已为您") || s.startsWith("正在为您") || s.startsWith("为您") || s.startsWith("这就为您")) {
-            return "Готово";
         }
         // templated: "…温度…26…度" → temperature confirmation with the number
         java.util.regex.Matcher m = java.util.regex.Pattern.compile("(\\d{1,3})").matcher(s);
@@ -1058,8 +1003,8 @@ public final class RuBridge {
         if (s.contains("座椅通风")) return "Включаю вентиляцию сиденья" + (num != null ? " " + num : "");
         if (s.contains("车窗")) return s.contains("关") ? "Закрываю окно" : "Открываю окно";
         if (s.contains("空调")) return s.contains("关") ? "Выключаю климат" : "Включаю климат";
-        if (s.contains("好") || s.contains("完成") || s.contains("成功")) return "Готово";
-        return null;
+        if (s.contains("好的")) return "Готово";
+        return null; // unknown → stock Chinese fallback
     }
 
     /** Subtitle of what's being spoken now (avatar/TTS channel), like the stock UI. */
@@ -1133,6 +1078,7 @@ public final class RuBridge {
      *  at attempt < MAX the backend MAY return ONE corrected zhCommand (the LLM's second guess); at
      *  attempt >= MAX it MUST answer without a command. Bounded — one retry, never a loop. */
     static void sendToCloud(final String text, final boolean localFailed, final String failedCommand, final int attempt) {
+        if (offlineOnly()) { showOnScreen("Не поняла команду", TYPE_FEEDBACK); return; }
         if (!isMainProcess()) return;   // one backend call + one TTS, in the process where TtsClient is ready
         new Thread(new Runnable() { public void run() {
             try {
@@ -1237,13 +1183,8 @@ public final class RuBridge {
                     showOnScreen(display, TYPE_FEEDBACK); // answer message on the assistant widget
                     showTtsSubtitle(display);             // spoken-subtitle channel (avatar/TTS)
                 }
-                boolean hasCommands = (zhCmds != null && zhCmds.length() > 0) || (nlu != null && nlu.length() > 0);
                 if (!audio.isEmpty()) playPcm(audio);      // RU speech pre-synthesized by our backend
-                else if (!spoken.isEmpty()) {
-                    if (!hasCommands || !followup.isEmpty()) {
-                        speak(spoken);  // else our on-device Tera TTS (RU), '+' consumed
-                    }
-                }
+                else if (!spoken.isEmpty()) speak(spoken);  // else our on-device Tera TTS (RU), '+' consumed
                 // record this exchange for multi-turn context (clean text, no '+' stress marks)
                 recordTurn(text, stripStress(!followup.isEmpty() ? followup : answer));
             } catch (Throwable t) {
@@ -1502,6 +1443,7 @@ public final class RuBridge {
 
     /** Generic fire-and-forget JSON POST to our backend (background thread). */
     private static void postJson(final String url, final JSONObject body, final String tag) {
+        if (offlineOnly()) return;
         new Thread(new Runnable() { public void run() {
             try {
                 Log.i(TAG, tag + " body " + body);   // observable even if backend is unreachable
@@ -1681,12 +1623,7 @@ public final class RuBridge {
                 f.setAccessible(true);
                 java.util.concurrent.atomic.AtomicInteger ai = (java.util.concurrent.atomic.AtomicInteger) f.get(null);
                 if (ai != null && ai.get() == 0) {
-                    int wakeState = zone;
-                    try {
-                        wakeState = (Integer) c.getMethod("getWakeState", int.class).invoke(null, zone);
-                    } catch (Throwable ignored) {}
-                    if (wakeState <= 0) wakeState = (zone >= 1 ? zone : 1);
-                    ai.set(wakeState);
+                    ai.set(zone >= 1 ? zone : 1);
                     Log.i(TAG, "forceWake: sVwState set to " + ai.get() + " via " + cn);
                 }
                 return;   // class found → done (never touch a second copy)
@@ -1835,30 +1772,17 @@ public final class RuBridge {
     private static int currentDirect(Object session, int fallback) {
         try {
             if (session != null) {
-                try {
-                    Object v = session.getClass().getMethod("getCurrentDirect").invoke(session);
-                    int d = ((Number) v).intValue();
-                    if (d >= 1 && d <= 5) return d;
-                    if (d >= 16) return d;
-                } catch (Throwable ignored) {}
+                Object v = session.getClass().getMethod("getCurrentDirect").invoke(session);
+                int d = ((Number) v).intValue();
+                if (d >= 1 && d <= 5) return d;
+                if (d >= 16) return d;
             }
             for (String cn : VW_CLASSES) {
                 try {
                     Class<?> vc = Class.forName(cn);
                     int vw = (Integer) vc.getMethod("getVwState").invoke(null);
-                    try {
-                        int dir = (Integer) vc.getMethod("getWakeDirection", int.class).invoke(null, vw);
-                        if (dir >= 1 && dir <= 5) return dir;
-                        if (dir >= 16) return dir;
-                    } catch (Throwable ignored) {}
                     if (vw >= 1 && vw <= 5) return vw;
-                    if (vw == 9) return 1;
-                    if (vw == 10) return 2;
-                    if (vw == 11) return 3;
-                    if (vw == 12) return 4;
-                    if (vw == 13) return 5;
-                    if (vw >= 16 && vw < 24) return vw;
-                    if (vw >= 24 && vw <= 28) return vw - 8;
+                    if (vw >= 16) return vw;
                     break;
                 } catch (ClassNotFoundException ignored) {}
             }
@@ -1886,7 +1810,7 @@ public final class RuBridge {
         if (query == null || query.trim().isEmpty()) return;
         String cmd = mapCommand(query);
         if (cmd != null) { Log.i(TAG, "-> car command: " + cmd); execArbitration(cmd); }
-        else if (OFFLINE_ONLY) {
+        else if (offlineOnly()) {
             Log.i(TAG, "-> offline, unrecognized: " + query);
             showOnScreen("Не поняла команду", TYPE_FEEDBACK); // local reply; online chat not wired yet
         }
@@ -1991,7 +1915,7 @@ public final class RuBridge {
         // Free-form (weather / knowledge / chat): the command map missed → send RAW Russian to our
         // backend. It answers in Russian and may return car commands (executed inside sendToCloud).
         // No RU->ZH translation here anymore.
-        if (OFFLINE_ONLY) { Log.i(TAG, "ru2zh: unrecognized (offline): " + ru); showOnScreen("Не поняла команду", TYPE_FEEDBACK); }
+        if (offlineOnly()) { Log.i(TAG, "ru2zh: unrecognized (offline): " + ru); showOnScreen("Не поняла команду", TYPE_FEEDBACK); }
         else { Log.i(TAG, "ru2zh: -> backend chat: " + ru); sendToCloud(ru); }
     }
 
@@ -2519,24 +2443,6 @@ public final class RuBridge {
         return t;
     }
 
-    public static String getDirectName(int zone) {
-        switch (zone) {
-            case 1: return "left";
-            case 2: return "right";
-            case 3: return "rear_left";
-            case 4: return "rear_right";
-            case 5: return "rear_mid";
-            case 16: return "out_all";
-            case 17: return "out_front";
-            case 18: return "out_back";
-            case 19: return "out_left";
-            case 20: return "out_right";
-            default:
-                if (zone >= 16) return "out_all";
-                return "left";
-        }
-    }
-
     private static String arbFlat(String rid, String query, String domain, String intent,
                                   java.util.Map<String,String> slots) {
         try {
@@ -2548,7 +2454,7 @@ public final class RuBridge {
                 arr.put(new JSONObject().put("name", e.getKey())
                         .put("value", e.getValue()).put("normalizedValue", e.getValue()));
             }
-            String dirStr = getDirectName(wakeZone);
+            String dirStr = (wakeZone == 18) ? "outside" : "front_left";
             return new JSONObject().put("query", query).put("requestId", rid).put("nluType", 0).put("zoneId", wakeZone)
                     .put("direction", dirStr)
                     .put("nluResults", new org.json.JSONArray().put(nlu)).toString();
