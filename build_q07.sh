@@ -52,35 +52,16 @@ def repl(fpath, sig_pat, body, label):
     """Заменяет тело метода по regex-якорю. sig_pat — regex от `.method` до
     `.registers N\n`. body вставляется сразу после `.registers` строки."""
     if not os.path.exists(fpath):
-        print(f"  WARN {label}: file missing {fpath}")
-        return
+        sys.exit(f"hook {label}: file missing {fpath}")
     s = open(fpath, encoding='utf-8').read()
     m = re.search(sig_pat, s, re.S)
     if not m:
-        print(f"  WARN {label}: sig not found in {fpath}")
-        return
+        sys.exit(f"hook {label}: sig not found in {fpath}")
     # вставка после .registers внутри метода
     anchor_end = m.end()
     s = s[:anchor_end] + body + s[anchor_end:]
     open(fpath, 'w', encoding='utf-8').write(s)
     print(f"  [hook] {label}")
-
-def repl_reg(fpath, sig_pat, body, reg_to, label):
-    """Как repl, но дополнительно поднимает .registers первой группы до reg_to."""
-    if not os.path.exists(fpath):
-        print(f"  WARN {label}: file missing {fpath}")
-        return
-    s = open(fpath, encoding='utf-8').read()
-    m = re.search(sig_pat, s, re.S)
-    if not m:
-        print(f"  WARN {label}: sig not found in {fpath}")
-        return
-    # заменить .registers в матче
-    new_sig = re.sub(r'\.registers \d+', '.registers ' + str(reg_to), m.group(0), count=1)
-    anchor_end = m.end()
-    s = s[:m.start()] + new_sig + body + s[anchor_end:]
-    open(fpath, 'w', encoding='utf-8').write(s)
-    print(f"  [hook] {label} (registers->{reg_to})")
 
 # (a) VoiceApp: загрузчик dex до загрузки наших классов, остальное через него (см. DexOverlay)
 repl(
@@ -98,196 +79,49 @@ open(va, 'a', encoding='utf-8').write(
     ".end method\n")
 print("  [hook] VoiceApp.attachBaseContext -> DexOverlay.install")
 
-# (b2) SrSession.stopRecognize() -> FeedTask.start() (async feed3)
-repl_reg(
+# Хуки только вызывают методы com.stand.bridge.Hooks, решения принимает Java: их можно менять обновлением dex.
+
+# (b2) SrSession.stopRecognize
+repl(
     path('classes26','com','incall','apps','speechassistant','sr','SrSession.smali'),
     r'(\.method public stopRecognize\(\)I\n\s*\.registers \d+\n)',
-    ("    const-string v3, \"FEED3\"\n"
-     "    const-string v4, \"call-async\"\n"
-     "    invoke-static {v3, v4}, Landroid/util/Log;->e(Ljava/lang/String;Ljava/lang/String;)I\n"
-     "    invoke-static {}, Lcom/stand/asr/FeedTask;->start()V\n"),
-    8,
-    'SrSession.stopRecognize -> FeedTask.start (async feed3)')
+    "    invoke-static {}, Lcom/stand/bridge/Hooks;->onStopRecognize()V\n",
+    'SrSession.stopRecognize -> Hooks.onStopRecognize')
 
-# Create FeedTask.smali in classes26
-ft_path = path('classes26', 'com', 'stand', 'asr', 'FeedTask.smali')
-os.makedirs(os.path.dirname(ft_path), exist_ok=True)
-open(ft_path, 'w', encoding='utf-8').write(
-    '.class public Lcom/stand/asr/FeedTask;\n'
-    '.super Ljava/lang/Object;\n'
-    '.implements Ljava/lang/Runnable;\n\n'
-    '.field private static isFeeding:Z\n\n'
-    '.method public constructor <init>()V\n'
-    '    .registers 1\n'
-    '    invoke-direct {p0}, Ljava/lang/Object;-><init>()V\n'
-    '    return-void\n'
-    '.end method\n\n'
-    '.method public static reset()V\n'
-    '    .registers 1\n'
-    '    const/4 v0, 0x0\n'
-    '    sput-boolean v0, Lcom/stand/asr/FeedTask;->isFeeding:Z\n'
-    '    return-void\n'
-    '.end method\n\n'
-    '.method public static declared-synchronized start()V\n'
-    '    .registers 4\n'
-    '    const-class v3, Lcom/stand/asr/FeedTask;\n'
-    '    monitor-enter v3\n'
-    '    :try_start\n'
-    '    sget-boolean v0, Lcom/stand/asr/FeedTask;->isFeeding:Z\n'
-    '    if-eqz v0, :cond_skip\n'
-    '    monitor-exit v3\n'
-    '    return-void\n'
-    '    :cond_skip\n'
-    '    const/4 v0, 0x1\n'
-    '    sput-boolean v0, Lcom/stand/asr/FeedTask;->isFeeding:Z\n'
-    '    new-instance v0, Ljava/lang/Thread;\n'
-    '    new-instance v1, Lcom/stand/asr/FeedTask;\n'
-    '    invoke-direct {v1}, Lcom/stand/asr/FeedTask;-><init>()V\n'
-    '    const-string v2, "stand-feed3"\n'
-    '    invoke-direct {v0, v1, v2}, Ljava/lang/Thread;-><init>(Ljava/lang/Runnable;Ljava/lang/String;)V\n'
-    '    invoke-virtual {v0}, Ljava/lang/Thread;->start()V\n'
-    '    :try_end\n'
-    '    .catchall {:try_start .. :try_end} :catchall\n'
-    '    monitor-exit v3\n'
-    '    return-void\n'
-    '    :catchall\n'
-    '    move-exception v0\n'
-    '    monitor-exit v3\n'
-    '    throw v0\n'
-    '.end method\n\n'
-    '.method public run()V\n'
-    '    .registers 1\n'
-    '    invoke-static {}, Lcom/stand/asr/FeedTask;->doFeed()V\n'
-    '    return-void\n'
-    '.end method\n\n'
-    '.method private static declared-synchronized doFeed()V\n'
-    '    .registers 7\n'
-    '    invoke-static {}, Lcom/incall/apps/speechassistant/common/VoiceStateCache;->isWakeUp()Z\n'
-    '    move-result v0\n'
-    '    if-nez v0, :cond_feed_ok\n'
-    '    invoke-static {}, Lcom/incall/apps/speechassistant/common/VoiceStateCache;->isOutSide()Z\n'
-    '    move-result v0\n'
-    '    if-nez v0, :cond_feed_ok\n'
-    '    const-string v0, "FeedTask"\n'
-    '    const-string v1, "doFeed skipped: assistant asleep (not awake, not outside)"\n'
-    '    invoke-static {v0, v1}, Landroid/util/Log;->i(Ljava/lang/String;Ljava/lang/String;)I\n'
-    '    return-void\n'
-    '    :cond_feed_ok\n'
-    '    const/4 v0, 0x0\n'
-    '    const/4 v1, 0x0\n'
-    '    const/4 v2, 0x0\n'
-    '    const-wide/16 v3, 0x3\n'
-    '    const/4 v5, 0x0\n'
-    '    const/4 v6, 0x0\n'
-    '    invoke-static/range {v0 .. v6}, Lcom/stand/bridge/RuBridge;->feed(Ljava/lang/Object;IIJ[BI)V\n'
-    '    return-void\n'
-    '.end method\n'
-)
-print("  [new] classes26/com/stand/asr/FeedTask.smali")
-
-
-# (b3) SrSession.startRecognize(IZ) -> FeedTask.reset + GigaAsr.reset
+# (b3) SrSession.startRecognize(IZ)
 repl(
     path('classes26','com','incall','apps','speechassistant','sr','SrSession.smali'),
     r'(\.method public startRecognize\(IZ\)I\n\s*\.registers \d+\n)',
-    ("    invoke-static {}, Lcom/stand/asr/FeedTask;->reset()V\n"
-     "    invoke-static {}, Lcom/stand/asr/GigaAsr;->reset()V\n"),
-    'SrSession.startRecognize -> FeedTask.reset + GigaAsr.reset')
+    "    invoke-static {}, Lcom/stand/bridge/Hooks;->onStartRecognize()V\n",
+    'SrSession.startRecognize -> Hooks.onStartRecognize')
 
-# (b4) SrSession.onSrMsg(ILjava/lang/String;)V -> VAD hooks (speech_start=reset, speech_end/timeout=FeedTask.start)
+# (b4) SrSession.onSrMsg(ILjava/lang/String;)V
 repl(
     path('classes26','com','incall','apps','speechassistant','sr','SrSession.smali'),
     r'(\.method public onSrMsg\(ILjava/lang/String;\)V\n\s*\.registers \d+\n)',
     ("    move/from16 v0, p1\n"
-     "    const/16 v1, 0x451\n"
-     "    if-ne v0, v1, :stand_no_vad\n"
-     "    move-object/from16 v0, p2\n"
-     "    if-eqz v0, :stand_no_vad\n"
-     "    const-string v1, \"speech_start\"\n"
-     "    invoke-virtual {v1, v0}, Ljava/lang/String;->equals(Ljava/lang/Object;)Z\n"
-     "    move-result v1\n"
-     "    if-eqz v1, :stand_check_end\n"
-     "    invoke-static {}, Lcom/stand/asr/FeedTask;->reset()V\n"
-     "    invoke-static {}, Lcom/stand/asr/GigaAsr;->reset()V\n"
-     "    const-string v0, \"STAND_VAD\"\n"
-     "    const-string v1, \"speech_start -> reset\"\n"
-     "    invoke-static {v0, v1}, Landroid/util/Log;->i(Ljava/lang/String;Ljava/lang/String;)I\n"
-     "    goto :stand_no_vad\n"
-     "    :stand_check_end\n"
-     "    const-string v1, \"speech_end\"\n"
-     "    invoke-virtual {v1, v0}, Ljava/lang/String;->equals(Ljava/lang/Object;)Z\n"
-     "    move-result v1\n"
-     "    if-nez v1, :stand_check_awake\n"
-     "    const-string v1, \"speech_timeout\"\n"
-     "    invoke-virtual {v1, v0}, Ljava/lang/String;->equals(Ljava/lang/Object;)Z\n"
-     "    move-result v1\n"
-     "    if-nez v1, :stand_check_awake\n"
-     "    goto :stand_no_vad\n"
-     "    :stand_check_awake\n"
-     "    invoke-static {}, Lcom/incall/apps/speechassistant/common/VoiceStateCache;->isWakeUp()Z\n"
-     "    move-result v0\n"
-     "    if-nez v0, :stand_feed_run\n"
-     "    invoke-static {}, Lcom/incall/apps/speechassistant/common/VoiceStateCache;->isOutSide()Z\n"
-     "    move-result v0\n"
-     "    if-nez v0, :stand_feed_run\n"
-     "    const-string v0, \"STAND_VAD\"\n"
-     "    const-string v1, \"speech_end/timeout ignored: assistant is asleep\"\n"
-     "    invoke-static {v0, v1}, Landroid/util/Log;->i(Ljava/lang/String;Ljava/lang/String;)I\n"
-     "    goto :stand_no_vad\n"
-     "    :stand_feed_run\n"
-     "    const-string v0, \"STAND_VAD\"\n"
-     "    const-string v1, \"speech_end/timeout -> FeedTask.start()\"\n"
-     "    invoke-static {v0, v1}, Landroid/util/Log;->i(Ljava/lang/String;Ljava/lang/String;)I\n"
-     "    invoke-static {}, Lcom/stand/asr/FeedTask;->start()V\n"
-     "    :stand_no_vad\n"),
-    'SrSession.onSrMsg -> VAD speech_start/speech_end/timeout hooks')
+     "    move-object/from16 v1, p2\n"
+     "    invoke-static {v0, v1}, Lcom/stand/bridge/Hooks;->onSrMsg(ILjava/lang/String;)V\n"),
+    'SrSession.onSrMsg -> Hooks.onSrMsg')
 
-# (b) SeEngineProxy.process([BI)I -> downmix 8ch→mono + GigaAsr.accept (only when inside car)
-repl_reg(
+# (b) SeEngineProxy.process([BI)I
+repl(
     path('classes14','com','incall','apps','voiceservice','proxy','SeEngineProxy.smali'),
     r'(\.method public process\(\[BI\)I\n\s*\.registers \d+\n)',
-    ("    invoke-static {}, Lcom/incall/apps/speechassistant/common/VoiceStateCache;->isOutSide()Z\n"
-     "    move-result v0\n"
-     "    if-nez v0, :cond_cabin_skip\n"
-     "    new-array v4, p2, [B\n"
-     "    const/4 v5, 0x0\n"
-     "    const/4 v6, 0x0\n"
-     "    :dmx_loop\n"
-     "    if-ge v5, p2, :dmx_done\n"
-     "    aget-byte v7, p1, v5\n"
-     "    add-int/lit8 v8, v5, 0x1\n"
-     "    aget-byte v8, p1, v8\n"
-     "    aput-byte v7, v4, v6\n"
-     "    add-int/lit8 v0, v6, 0x1\n"
-     "    aput-byte v8, v4, v0\n"
-     "    add-int/lit8 v6, v6, 0x2\n"
-     "    add-int/lit8 v5, v5, 0x10\n"
-     "    goto :dmx_loop\n"
-     "    :dmx_done\n"
-     "    invoke-static {v4, v6}, Lcom/stand/asr/GigaAsr;->accept([BI)V\n"
-     "    :cond_cabin_skip\n"),
-    12,
-    'SeEngineProxy.process -> downmix 8ch->mono + GigaAsr.accept')
+    "    invoke-static {p1, p2}, Lcom/stand/bridge/Hooks;->onCabinAudio([BI)V\n",
+    'SeEngineProxy.process -> Hooks.onCabinAudio')
 
-# (h) SrSession.checkNlpResult: bypass FreeWakeManager for stand commands
+# (h) SrSession.checkNlpResult: наши команды идут мимо FreeWakeManager
 repl(
     path('classes26','com','incall','apps','speechassistant','sr','SrSession.smali'),
     r'(\.method private checkNlpResult\(ILcom/incall/apps/voiceservice/sr/bean/NlpBean;\)Z\n\s*\.registers \d+\n)',
-    ("    if-eqz p2, :stand_check_orig\n"
-     "    iget-object v0, p2, Lcom/incall/apps/voiceservice/sr/bean/NlpBean;->sid:Ljava/lang/String;\n"
-     "    if-eqz v0, :stand_check_orig\n"
-     "    const-string v1, \"stand\"\n"
-     "    invoke-virtual {v0, v1}, Ljava/lang/String;->startsWith(Ljava/lang/String;)Z\n"
+    ("    invoke-static {p0, p2}, Lcom/stand/bridge/Hooks;->acceptStandNlp(Ljava/lang/Object;Ljava/lang/Object;)Z\n"
      "    move-result v0\n"
      "    if-eqz v0, :stand_check_orig\n"
-     "    invoke-virtual {p0}, Lcom/incall/apps/speechassistant/sr/SrSession;->clearResult()V\n"
-     "    const-string v0, \"RuBridge\"\n"
-     "    const-string v1, \"checkNlpResult: stand cmd accepted, bypassing FreeWakeManager!\"\n"
-     "    invoke-static {v0, v1}, Landroid/util/Log;->i(Ljava/lang/String;Ljava/lang/String;)I\n"
      "    const/4 v0, 0x1\n"
      "    return v0\n"
      "    :stand_check_orig\n"),
-    'SrSession.checkNlpResult -> bypass FreeWakeManager for stand commands')
+    'SrSession.checkNlpResult -> Hooks.acceptStandNlp')
 
 # (d) TtsPlayer.start / TtsPlayer2.start
 for cls in ('TtsPlayer','TtsPlayer2'):
@@ -330,54 +164,40 @@ repl(
      "    return-object v1\n"),
     'CommonConfig.getDialogUrl -> loopback')
 
-# (f) TipsManager.getWakeUpTipsFromClick -> marker "Слушаю"
+# (f) TipsManager.getWakeUpTipsFromClick
 repl(
     path('classes23','com','incall','apps','speechassistant','tips','TipsManager.smali'),
     r'(\.method public getWakeUpTipsFromClick\(\)Ljava/lang/String;\n\s*\.registers \d+\n)',
-    ("    const-string v0, \"\\u0421\\u043b\\u0443\\u0448\\u0430\\u044e\"\n"
+    ("    invoke-static {}, Lcom/stand/bridge/Hooks;->clickWakeTip()Ljava/lang/String;\n"
+     "    move-result-object v0\n"
      "    return-object v0\n"),
-    'TipsManager.getWakeUpTipsFromClick -> marker')
+    'TipsManager.getWakeUpTipsFromClick -> Hooks.clickWakeTip')
 
 # (g) PgsController.updateText(String,CharSequence,J) -> подменить текст на русский (UI)
 repl(
     path('classes19','com','incall','apps','speechassistant','controller','PgsController.smali'),
     r'(\.method public updateText\(Ljava/lang/String;Ljava/lang/CharSequence;J\)V\n\s*\.registers \d+\n)',
-    ("    invoke-static {p1}, Lcom/stand/bridge/RuBridge;->swap(Ljava/lang/String;)Ljava/lang/String;\n"
-     "    move-result-object v1\n"
-     "    invoke-virtual {v1}, Ljava/lang/String;->isEmpty()Z\n"
-     "    move-result v2\n"
-     "    if-nez v2, :stand_no_swap\n"
-     "    move-object p1, v1\n"
-     "    :stand_no_swap\n"),
-    'PgsController.updateText -> RuBridge.swap (UI RU)')
+    ("    invoke-static {p1}, Lcom/stand/bridge/Hooks;->updateText(Ljava/lang/String;)Ljava/lang/String;\n"
+     "    move-result-object p1\n"),
+    'PgsController.updateText -> Hooks.updateText (UI RU)')
 
 # (c) NluManager.onArbitrationResult
 repl(
     path('classes23','com','incall','apps','speechassistant','nlu','NluManager.smali'),
     r'(\.method private onArbitrationResult\(Ljava/lang/String;\)V\n\s*\.registers \d+\n)',
     ("    move-object/from16 v0, p1\n"
-     "    invoke-static {v0}, Lcom/stand/bridge/RuBridge;->isOurs(Ljava/lang/String;)Z\n"
-     "    move-result v1\n"
-     "    if-nez v1, :stand_pass_arb\n"
-     "    invoke-static {}, Lcom/incall/apps/speechassistant/common/VoiceStateCache;->isOutSide()Z\n"
-     "    move-result v1\n"
-     "    if-eqz v1, :stand_pass_arb\n"
-     "    const-string v0, \"RuBridge\"\n"
-     "    const-string v1, \"onArbitrationResult: dropped non-ours (Chinese) NLU result\"\n"
-     "    invoke-static {v0, v1}, Landroid/util/Log;->i(Ljava/lang/String;Ljava/lang/String;)I\n"
+     "    invoke-static {v0}, Lcom/stand/bridge/Hooks;->onArbitrationResult(Ljava/lang/String;)Z\n"
+     "    move-result v0\n"
+     "    if-nez v0, :stand_run_orig\n"
      "    return-void\n"
-     "    :stand_pass_arb\n"
-     "    invoke-static {v0}, Lcom/stand/bridge/RuBridge;->checkArbResult(Ljava/lang/String;)V\n"
-     "    goto :stand_run_orig\n"
      "    :stand_run_orig\n"),
-    'NluManager.onArbitrationResult -> checkArbResult if ours, else drop Chinese result')
+    'NluManager.onArbitrationResult -> Hooks.onArbitrationResult')
 
 # (c2) ArbitrationManager.arbitrationNluResult (instant arbitration 0ms for stand)
 repl(
     path('classes28','com','incall','apps','speechassistant','arbitration','ArbitrationManager.smali'),
     r'(\.method public arbitrationNluResult\(Ljava/lang/String;Ljava/lang/String;\)V\n.*?invoke-virtual \{v14\}, Lcom/incall/apps/speechassistant/arbitration/ArbitrationResult;->getResult\(\)Ljava/util/concurrent/atomic/AtomicBoolean;\n\s*move-result-object v15\n)',
-    ("    const-string v0, \"stand\"\n"
-     "    invoke-virtual {v13, v0}, Ljava/lang/String;->startsWith(Ljava/lang/String;)Z\n"
+    ("    invoke-static {v13}, Lcom/stand/bridge/Hooks;->isStandRequest(Ljava/lang/String;)Z\n"
      "    move-result v1\n"
      "    if-eqz v1, :cond_stand_no_fast_arbi\n"
      "    invoke-virtual {v11}, Lcom/incall/apps/speechassistant/nlu/NluResponse;->getZoneId()I\n"
@@ -404,41 +224,31 @@ repl(
      "    :cond_stand_notify_pass\n"),
     'NotifierUtil.notifyTextChanged -> RuBridge.filterShowText')
 
-# (j) VoiceEnableUtils.smali: prevent stopRecognize when outside
-repl(
-    path('classes21','com','incall','apps','speechassistant','util','VoiceEnableUtils.smali'),
-    r'(\s*invoke-virtual \{v1, v4, v3\}, Lcom/incall/apps/speechassistant/controller/BusinessController;->stopRecognize\(IZ\)V)',
-    '    # do not stop outside recognize',
-    'VoiceEnableUtils: bypass stopRecognize when outside')
-
-# (k) OutSeEngineProxy.process([BI)I -> raw 6-channel PCM to GigaAsr.acceptOutside (only when outside)
+# (k) OutSeEngineProxy.process([BI)I: своего метода в классе нет, добавляем
 op_path = path('classes14','com','incall','apps','voiceservice','proxy','OutSeEngineProxy.smali')
-if os.path.exists(op_path):
-    op_s = open(op_path, encoding='utf-8').read()
-    if '.method public process([BI)I' not in op_s:
-        out_proc = (
-            "\n.method public process([BI)I\n"
-            "    .registers 12\n"
-            "    .param p1, \"buffer\"    # [B\n"
-            "    .param p2, \"length\"    # I\n\n"
-            "    invoke-static {}, Lcom/incall/apps/speechassistant/common/VoiceStateCache;->isOutSide()Z\n"
-            "    move-result v0\n"
-            "    if-eqz v0, :cond_out_dmx_skip\n"
-            "    invoke-static {p1, p2}, Lcom/stand/asr/GigaAsr;->acceptOutside([BI)V\n"
-            "    :cond_out_dmx_skip\n"
-            "    iget-object v0, p0, Lcom/incall/apps/voiceservice/proxy/SeEngineProxy;->mCaSe:Lcom/incall/voicecore/se/ICaSe;\n"
-            "    if-eqz v0, :cond_out_ret_zero\n"
-            "    invoke-interface {v0, p1, p2}, Lcom/incall/voicecore/se/ICaSe;->process([BI)I\n"
-            "    move-result v0\n"
-            "    return v0\n"
-            "    :cond_out_ret_zero\n"
-            "    const/4 v0, 0x0\n"
-            "    return v0\n"
-            ".end method\n"
-        )
-        op_s += out_proc
-        open(op_path, 'w', encoding='utf-8').write(op_s)
-        print("  [hook] OutSeEngineProxy.process -> GigaAsr.acceptOutside (only outside)")
+if not os.path.exists(op_path):
+    sys.exit("hook OutSeEngineProxy: file missing")
+op_s = open(op_path, encoding='utf-8').read()
+if '.method public process([BI)I' not in op_s:
+    out_proc = (
+        "\n.method public process([BI)I\n"
+        "    .registers 12\n"
+        "    .param p1, \"buffer\"    # [B\n"
+        "    .param p2, \"length\"    # I\n\n"
+        "    invoke-static {p1, p2}, Lcom/stand/bridge/Hooks;->onOutsideAudio([BI)V\n"
+        "    iget-object v0, p0, Lcom/incall/apps/voiceservice/proxy/SeEngineProxy;->mCaSe:Lcom/incall/voicecore/se/ICaSe;\n"
+        "    if-eqz v0, :cond_out_ret_zero\n"
+        "    invoke-interface {v0, p1, p2}, Lcom/incall/voicecore/se/ICaSe;->process([BI)I\n"
+        "    move-result v0\n"
+        "    return v0\n"
+        "    :cond_out_ret_zero\n"
+        "    const/4 v0, 0x0\n"
+        "    return v0\n"
+        ".end method\n"
+    )
+    op_s += out_proc
+    open(op_path, 'w', encoding='utf-8').write(op_s)
+    print("  [hook] OutSeEngineProxy.process -> Hooks.onOutsideAudio")
 
 # (l) GuideWordsStore.getSleepText / getSrText -> RuBridge.ruGuideSleep / ruGuideSr (Russian hints)
 repl(

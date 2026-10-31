@@ -27,7 +27,7 @@ import static com.stand.bridge.Ru2Zh.*;
 public final class RuBridge {
     private static final String TAG = "RuBridge";
     /** Bump with every published dex: the log shows which code actually runs. */
-    private static final String CODE_VERSION = "q07-8";
+    private static final String CODE_VERSION = "q07-9";
 
 
     // Stock TTS-engine registry (world-writable dir; the app runs as uid=system). Registering our
