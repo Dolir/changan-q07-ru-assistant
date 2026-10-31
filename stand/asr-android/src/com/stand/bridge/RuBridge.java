@@ -26,6 +26,8 @@ import static com.stand.bridge.Ru2Zh.*;
  */
 public final class RuBridge {
     private static final String TAG = "RuBridge";
+    /** Bump with every published dex: the log shows which code actually runs. */
+    private static final String CODE_VERSION = "q07-1";
 
 
     // Stock TTS-engine registry (world-writable dir; the app runs as uid=system). Registering our
@@ -446,6 +448,7 @@ public final class RuBridge {
     }
 
     public static void init(final Context ctx) {
+        Log.i(TAG, "init code=" + CODE_VERSION);
         Ru2Zh.onUnsafeBlocked = new Ru2Zh.UnsafeListener() { public void blocked(String zh) {
             Log.w(TAG, "ru2zh: UNSAFE blocked (ALLOW_UNSAFE=false): " + zh);
             showOnScreen("Команда требует подтверждения", TYPE_FEEDBACK);

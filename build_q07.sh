@@ -82,19 +82,21 @@ def repl_reg(fpath, sig_pat, body, reg_to, label):
     open(fpath, 'w', encoding='utf-8').write(s)
     print(f"  [hook] {label} (registers->{reg_to})")
 
-# (a) VoiceApp.onCreate
+# (a) VoiceApp: загрузчик dex до загрузки наших классов, остальное через него (см. DexOverlay)
 repl(
     path('classes18','com','incall','apps','speechassistant','application','VoiceApp.smali'),
     r'(\.method public onCreate\(\)V\n\s*\.registers \d+\n)',
-    ("    invoke-static {p0}, Lcom/stand/bridge/RuBridge;->init(Landroid/content/Context;)V\n"
-     "    new-instance v0, Lcom/stand/bridge/StandNluReceiver;\n"
-     "    invoke-direct {v0}, Lcom/stand/bridge/StandNluReceiver;-><init>()V\n"
-     "    new-instance v1, Landroid/content/IntentFilter;\n"
-     "    const-string v2, \"com.stand.NLU\"\n"
-     "    invoke-direct {v1, v2}, Landroid/content/IntentFilter;-><init>(Ljava/lang/String;)V\n"
-     "    const/4 v2, 0x2\n"
-     "    invoke-virtual {p0, v0, v1, v2}, Landroid/content/Context;->registerReceiver(Landroid/content/BroadcastReceiver;Landroid/content/IntentFilter;I)Landroid/content/Intent;\n"),
-    'VoiceApp.onCreate -> RuBridge.init + receiver')
+    "    invoke-static {p0}, Lcom/stand/loader/DexOverlay;->boot(Landroid/app/Application;)V\n",
+    'VoiceApp.onCreate -> DexOverlay.boot')
+va = path('classes18','com','incall','apps','speechassistant','application','VoiceApp.smali')
+open(va, 'a', encoding='utf-8').write(
+    "\n.method protected attachBaseContext(Landroid/content/Context;)V\n"
+    "    .registers 2\n"
+    "    invoke-super {p0, p1}, Landroid/app/Application;->attachBaseContext(Landroid/content/Context;)V\n"
+    "    invoke-static {p1}, Lcom/stand/loader/DexOverlay;->install(Landroid/content/Context;)V\n"
+    "    return-void\n"
+    ".end method\n")
+print("  [hook] VoiceApp.attachBaseContext -> DexOverlay.install")
 
 # (b2) SrSession.stopRecognize() -> FeedTask.start() (async feed3)
 repl_reg(
@@ -534,6 +536,7 @@ done
 echo "[5/7] собираю classes35.dex из stand/asr-android (Java -> dex)"
 cmd.exe /c "stand\\asr-android\\build_dex_win.bat"
 cp "$HERE/stand/asr-android/build/dex7/classes.dex" "$BDIR/classes35.dex"
+cp "$HERE/stand/asr-android/build/dex_loader/classes.dex" "$BDIR/classes36.dex"
 echo "  classes35.dex готов"
 
 # jni
@@ -560,12 +563,12 @@ done
 FLAT="$BDIR/flat"; rm -rf "$FLAT"; mkdir -p "$FLAT"
 cp "$BDIR/dex/classes33.dex" "$BDIR/dex/classes29.dex" "$BDIR/dex/classes28.dex" "$BDIR/dex/classes26.dex" "$BDIR/dex/classes24.dex" "$BDIR/dex/classes23.dex" \
    "$BDIR/dex/classes21.dex" "$BDIR/dex/classes20.dex" "$BDIR/dex/classes19.dex" "$BDIR/dex/classes18.dex" "$BDIR/dex/classes15.dex" "$BDIR/dex/classes14.dex" "$BDIR/dex/classes11.dex" \
-   "$BDIR/classes35.dex" "$FLAT/"
+   "$BDIR/classes35.dex" "$BDIR/classes36.dex" "$FLAT/"
 cp -r "$BDIR/lib" "$FLAT/lib"
 cp -r "$BDIR/assets" "$FLAT/assets"
 # 2) dex в корень
 ( cd "$FLAT" && "$SEVENZ" a -tzip "$BDIR/new.apk" classes33.dex classes29.dex classes28.dex classes26.dex classes24.dex classes23.dex \
-    classes21.dex classes20.dex classes19.dex classes18.dex classes15.dex classes14.dex classes11.dex classes35.dex >/dev/null 2>&1 ) || true
+    classes21.dex classes20.dex classes19.dex classes18.dex classes15.dex classes14.dex classes11.dex classes35.dex classes36.dex >/dev/null 2>&1 ) || true
 # 3) lib БЕЗ сжатия (STORED) — критично для extractNativeLibs
 ( cd "$FLAT" && "$SEVENZ" a -tzip -mx=0 "$BDIR/new.apk" lib >/dev/null 2>&1 ) || true
 # 4) assets с сжатием (модели onnx уже сжаты slавлно)
