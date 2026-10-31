@@ -1339,7 +1339,7 @@ final class Ru2Zh {
             boolean phone = s.contains("телефон") || s.contains("звонк") || s.contains("звонок")
                 || s.contains("разговор") || s.contains("вызов") || s.contains("собеседник");
             boolean voice = s.contains("ассистент") || s.contains("помощник") || s.contains("помошник")
-                || s.contains("голос") || s.contains("тво") || s.contains("тебя") || s.contains("подсказ")
+                || s.contains("голос") || s.contains("тво") || s.contains("тебя") || s.contains("себя") || s.contains("подсказ")
                 || s.contains("озвучк") || s.contains("реч") || s.contains("говори");        // «говори тише» = голос ассистента
             String vol = media ? "音乐音量" : navi ? "导航音量" : phone ? "通话音量" : voice ? "语音音量" : "音量";
             String step = media ? "音乐音量" : navi ? "导航音量" : phone ? "通话音量" : voice ? "语音音量" : "声音";

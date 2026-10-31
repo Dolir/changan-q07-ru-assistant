@@ -27,7 +27,7 @@ import static com.stand.bridge.Ru2Zh.*;
 public final class RuBridge {
     private static final String TAG = "RuBridge";
     /** Bump with every published dex: the log shows which code actually runs. */
-    private static final String CODE_VERSION = "q07-5";
+    private static final String CODE_VERSION = "q07-8";
 
 
     // Stock TTS-engine registry (world-writable dir; the app runs as uid=system). Registering our
@@ -903,7 +903,6 @@ public final class RuBridge {
             // NB: do NOT push the answer to the widget here — the stock UI already renders it (the
             // russified NLG text). A duplicate showOnScreen leaves the previous answer lingering and
             // it flashes for a frame at the next dictation. We only replace the VOICE, not the UI.
-            callListener(listener, "onStartState", int.class, Integer.valueOf(0));
             callListener(listener, "onPlayBegin", String.class, ru);
             com.stand.tts.TeraTts.speak(ru, new Runnable() { public void run() {
                 finishTts(listener, player);
@@ -967,7 +966,7 @@ public final class RuBridge {
         StringBuilder out = new StringBuilder(CONFIRM_VERBS.get(w[verb]));
         for (int i = verb + 1; i < w.length; i++) {
             String word = w[i];
-            if (word.equals("пожалуйста")) continue;
+            if (word.equals("пожалуйста") || word.equals("себя")) continue;
             if (word.equals("мое") || word.equals("моё")) word = "ваше";
             else if (word.equals("мой")) word = "ваш";
             else if (word.equals("мою")) word = "вашу";
@@ -981,9 +980,16 @@ public final class RuBridge {
      *  Unreleased, the focus count only grows and the wheel volume stays on the assistant's channel. */
     private static void finishTts(Object listener, Object player) {
         callListener(listener, "onPlayComplete", null, null);
-        if (player == null) return;
         try {
-            java.lang.reflect.Method m = player.getClass().getDeclaredMethod("abandonFocus");
+            // The real player is a StreamTtsPlayer, the method and the count live in its parent.
+            // TtsPlayer2 asks for focus after our hook, so it has nothing to release here.
+            Class<?> c = player == null ? null : player.getClass();
+            while (c != null && !c.getName().endsWith(".tts.TtsPlayer")) c = c.getSuperclass();
+            if (c == null) return;
+            java.lang.reflect.Field counts = c.getDeclaredField("mFocusCounts");
+            counts.setAccessible(true);
+            if (((java.util.concurrent.atomic.AtomicInteger) counts.get(player)).get() <= 0) return;
+            java.lang.reflect.Method m = c.getDeclaredMethod("abandonFocus");
             m.setAccessible(true);
             m.invoke(player);
         } catch (Throwable t) { Log.e(TAG, "abandonFocus", t); }
