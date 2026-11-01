@@ -7,7 +7,6 @@
 package com.stand.asr;
 
 import android.content.Context;
-import android.content.res.AssetManager;
 import android.util.Log;
 import com.k2fsa.sherpa.onnx.FeatureConfig;
 import com.k2fsa.sherpa.onnx.OfflineModelConfig;
@@ -17,9 +16,6 @@ import com.k2fsa.sherpa.onnx.OfflineRecognizerConfig;
 import com.k2fsa.sherpa.onnx.OfflineStream;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
-import java.io.FileOutputStream;
-import java.io.InputStream;
-import java.io.OutputStream;
 
 /**
  * GigaAM-v3 CTC offline ASR backend. Runs on sherpa-onnx (the same native
@@ -29,11 +25,11 @@ import java.io.OutputStream;
  * from the stock SR callback with a phase flag (wp==1 start .. wp==3 end). We accumulate the whole
  * utterance between wp==1 and wp==3, then run one greedy-CTC decode. sherpa computes the 64-bin
  * GigaAM log-mel (via the model's `is_giga_am` metadata) and the CTC decode internally, so no
- * hand-rolled feature extraction. Model assets (~224 MB int8) unpack from apk assets to filesDir once.
+ * hand-rolled feature extraction. The model (~224 MB int8) is not in the APK, see ModelStore.
  */
 public final class GigaAsr {
     private static final String TAG = "GigaAsr";
-    private static final String ASSET_DIR = "gigaam";   // apk assets/gigaam: model.int8.onnx, tokens.txt
+    private static final String MODEL_DIR = "gigaam";   // model.int8.onnx, tokens.txt
     private static final String MODEL = "model.int8.onnx";
     private static final String TOKENS = "tokens.txt";
     private static final int FEAT_DIM = 64;             // GigaAM v3 = 64 mel bins (NOT 80)
@@ -57,13 +53,11 @@ public final class GigaAsr {
         if (rec != null) return true;
         try {
             if (appCtx == null) return false;
-            File dir = new File(appCtx.getFilesDir(), ASSET_DIR);
+            File dir = com.stand.bridge.ModelStore.dir(appCtx, MODEL_DIR);
             File onnx = new File(dir, MODEL), toks = new File(dir, TOKENS);
-            if (needsUnpack(dir, onnx, toks)) {
-                Log.i(TAG, "unpacking GigaAM assets to " + dir + " (~224 MB)");
-                deleteRec(dir);
-                unpackAssets(ASSET_DIR, dir);
-                writeText(new File(dir, SIG), assetsSig());
+            if (!onnx.exists() || !toks.exists()) {
+                Log.e(TAG, "model is missing in " + dir);
+                return false;
             }
             multilingual = vocabHasLatin(toks);
             Log.i(TAG, "vocabulary: " + (multilingual ? "multilingual (ru/kk/ky/uz/en)" : "russian (v3)"));
@@ -99,50 +93,6 @@ public final class GigaAsr {
 
     /** Multilingual build (GigaAM-Multilingual CTC)? Only meaningful once the recognizer is ready. */
     public static boolean multilingual() { return multilingual; }
-
-    // `pm install -r` keeps filesDir. A plain "files exist" check therefore left the PREVIOUS build's model in
-    // place: the multilingual APK installed over the Russian one kept running GigaAM-v3 with the v3 tokens
-    // (and reported itself as Russian). Same trap TeraTts had. The unpacked set is now tied to the bundled one
-    // by a signature — name:size of each asset (cheap: openFd length, the assets are zip-stored).
-    private static final String SIG = ".sig";
-
-    private static boolean needsUnpack(File dir, File onnx, File toks) {
-        if (!onnx.exists() || !toks.exists()) return true;
-        String want = assetsSig();
-        if (want.isEmpty()) return false;                       // asset sizes unavailable → trust what is on disk
-        String have = readText(new File(dir, SIG));
-        if (want.equals(have)) return false;
-        Log.i(TAG, "model signature changed: apk=" + want + " disk=" + have);
-        return true;
-    }
-
-    private static String assetsSig() {
-        long m = assetLen(ASSET_DIR + "/" + MODEL), t = assetLen(ASSET_DIR + "/" + TOKENS);
-        return (m < 0 || t < 0) ? "" : MODEL + ":" + m + "|" + TOKENS + ":" + t;
-    }
-
-    private static long assetLen(String path) {
-        try { android.content.res.AssetFileDescriptor fd = appCtx.getAssets().openFd(path);
-              long n = fd.getLength(); fd.close(); return n; }
-        catch (Throwable t) { return -1; }
-    }
-
-    private static void deleteRec(File f) {
-        try { if (f.isDirectory()) { File[] ch = f.listFiles(); if (ch != null) for (File c : ch) deleteRec(c); }
-              f.delete(); } catch (Throwable ignored) {}
-    }
-
-    private static String readText(File f) {
-        try { byte[] b = new byte[(int) f.length()]; java.io.FileInputStream in = new java.io.FileInputStream(f);
-              int off = 0, n; while (off < b.length && (n = in.read(b, off, b.length - off)) > 0) off += n; in.close();
-              return new String(b, 0, off, "UTF-8"); }
-        catch (Throwable t) { return ""; }
-    }
-
-    private static void writeText(File f, String s) {
-        try { FileOutputStream o = new FileOutputStream(f); o.write(s.getBytes("UTF-8")); o.close(); }
-        catch (Throwable t) { Log.e(TAG, "writeText", t); }
-    }
 
     /** tokens.txt lines are "<char> <id>"; the multilingual vocabulary has a-z, the v3 one doesn't. */
     private static boolean vocabHasLatin(File tokens) {
@@ -276,22 +226,6 @@ public final class GigaAsr {
             return text == null ? "" : text.trim();
         } catch (Throwable t) { Log.e(TAG, "finish", t); return ""; }
         finally { if (st != null) try { st.release(); } catch (Throwable ignored) {} }
-    }
-
-    private static void unpackAssets(String assetDir, File outDir) throws Exception {
-        AssetManager am = appCtx.getAssets();
-        String[] list = am.list(assetDir);
-        if (list == null || list.length == 0) {   // it's a file
-            outDir.getParentFile().mkdirs();
-            InputStream in = am.open(assetDir);
-            OutputStream out = new FileOutputStream(outDir);
-            byte[] bb = new byte[1 << 16]; int n;
-            while ((n = in.read(bb)) > 0) out.write(bb, 0, n);
-            in.close(); out.close();
-            return;
-        }
-        outDir.mkdirs();
-        for (String name : list) unpackAssets(assetDir + "/" + name, new File(outDir, name));
     }
 
     private GigaAsr() {}

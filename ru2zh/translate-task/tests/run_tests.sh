@@ -13,6 +13,8 @@ SRC=../../../stand/asr-android/src/com/stand/bridge/Ru2Zh.java
 LD=../../../stand/asr-android/src/com/stand/asr/LangDetect.java
 # Uz2Ru: Uzbek → Russian keyword phrase → the same Ru2Zh (multi build). tests_uz.tsv mirrors tests.tsv line for line.
 UZ=../../../stand/asr-android/src/com/stand/bridge/Uz2Ru.java
+# AppNames: which app «открой ...» names, pure Java too.
+APPS=../../../stand/asr-android/src/com/stand/bridge/AppNames.java
 # Resolve a JDK with javac (any JDK 11+ works). Override with JAVA_HOME.
 if [ -n "$JAVA_HOME" ] && [ -x "$JAVA_HOME/bin/javac" ]; then
   JH="$JAVA_HOME"
@@ -27,7 +29,8 @@ fi
 if [ -n "$JH" ]; then JAVAC="$JH/bin/javac"; JAVA="$JH/bin/java"; else JAVAC=javac; JAVA=java; fi
 
 rm -rf build && mkdir -p build
-"$JAVAC" -encoding UTF-8 -d build "$SRC" "$LD" "$UZ" Ru2ZhTest.java LangDetectTest.java Uz2ZhTest.java
+"$JAVAC" -encoding UTF-8 -d build "$SRC" "$LD" "$UZ" "$APPS" Ru2ZhTest.java LangDetectTest.java Uz2ZhTest.java AppNamesTest.java
 "$JAVA" -cp build com.stand.asr.LangDetectTest
+"$JAVA" -cp build com.stand.bridge.AppNamesTest
 "$JAVA" -cp build com.stand.bridge.Ru2ZhTest tests.tsv chatter.txt
 "$JAVA" -cp build com.stand.bridge.Uz2ZhTest tests_uz.tsv chatter_uz.txt

@@ -3,7 +3,7 @@
 #
 # Использование:
 #   ./build_q07.sh <q07_original.apk> <speechassistant-ru-vX.Y.Z.apk> <out.apk>
-#   Из релиза мода берутся только модели; код собирается из stand/asr-android.
+#   Из релиза мода берётся только звук вызова; код собирается из stand/asr-android, модели ставит OpenQiyuan.
 #
 # Требует: java (ровно JDK 17: d8 из build-tools 34 падает на классах от javac 25), python3, 7z, zipalign/apksigner (build-tools), baksmali/smali (tools/).
 set -euo pipefail
@@ -299,14 +299,9 @@ echo "  classes35.dex готов"
 mkdir -p "$BDIR/lib/arm64-v8a"
 cp "$HERE/stand/asr-android/piper/jni/arm64-v8a/"*.so "$BDIR/lib/arm64-v8a/" 2>/dev/null || true
 
-# assets: gigaam + tera + stand/wake_chime
-mkdir -p "$BDIR/assets/gigaam" "$BDIR/assets/stand"
-"$SEVENZ" e -y -o"$BDIR/assets/gigaam" "$RU" "assets/gigaam/model.int8.onnx" "assets/gigaam/tokens.txt" >/dev/null 2>&1
+# assets: модели в APK не кладём (publish_q07.py models), только звук вызова
+mkdir -p "$BDIR/assets/stand"
 "$SEVENZ" e -y -o"$BDIR/assets/stand" "$RU" "assets/stand/wake_chime.wav" >/dev/null 2>&1
-"$SEVENZ" x -y -o"$BDIR/teraev" "$RU" "assets/tera/*" >/dev/null 2>&1
-if [ -d "$BDIR/teraev/assets/tera" ]; then
-  cp -r "$BDIR/teraev/assets/tera" "$BDIR/assets/"
-fi
 
 # --------------------------------------------------------------- 5. собрать APK
 echo "[6/7] собираю APK"
@@ -327,7 +322,7 @@ cp -r "$BDIR/assets" "$FLAT/assets"
     classes21.dex classes20.dex classes19.dex classes18.dex classes14.dex classes11.dex classes35.dex classes36.dex >/dev/null 2>&1 ) || true
 # 3) lib БЕЗ сжатия (STORED) — критично для extractNativeLibs
 ( cd "$FLAT" && "$SEVENZ" a -tzip -mx=0 "$BDIR/new.apk" lib >/dev/null 2>&1 ) || true
-# 4) assets с сжатием (модели onnx уже сжаты slавлно)
+# 4) assets
 ( cd "$FLAT" && "$SEVENZ" a -tzip "$BDIR/new.apk" assets >/dev/null 2>&1 ) || true
 
 echo "[7/7] zipalign + подпись"

@@ -3,6 +3,8 @@
 
   python publish_q07.py apk <версия> <apk>   весь мод (build_q07.sh), сбрасывает код на встроенный в него
   python publish_q07.py dex <версия>         только наш код (stand/asr-android/build/dex7/classes.dex)
+  python publish_q07.py models <версия> <apk с моделями>   пакеты моделей: OpenQiyuan скачивает их один раз
+  python publish_q07.py voice <версия> <имя> <название> <папка>   голос Piper из папки, по выбору в OpenQiyuan
 
 Ключ подписи: ../openqiyuan/keys/update_signing.pem (в git не хранится), открытая часть — в AssistantManager.kt.
 Требует gh и openssl.
@@ -16,6 +18,7 @@ import subprocess
 import sys
 import tempfile
 import urllib.request
+import zipfile
 
 REPO = "Dolir/changan-q07-ru-assistant"
 CHANNEL = "channel-beta"
@@ -24,6 +27,7 @@ KEY = os.path.join(HERE, "..", "openqiyuan", "keys", "update_signing.pem")
 BASE = f"https://github.com/{REPO}/releases/download"
 GH = shutil.which("gh") or r"C:\Program Files\GitHub CLI\gh.exe"
 OPENSSL = shutil.which("openssl") or r"C:\Program Files\Git\usr\bin\openssl.exe"
+MODELS = {"gigaam": "распознавание речи", "tera": "голос"}
 NOTES = ("Q07 test build {}. Noncommercial use only, see LICENSE. Contains proprietary stock components owned by "
          "their rights holders. Not affiliated with Changan.")
 
@@ -55,14 +59,56 @@ def release_file(version, src, name, work):
     return {"version": version, "url": f"{BASE}/{tag}/{name}", "sha256": sha256(path), "size": os.path.getsize(path)}
 
 
+def model_packs(version, src, work):
+    """Пакет на каждую модель: по файлам с размерами OpenQiyuan видит, что модель уже на месте."""
+    packs = {}
+    with zipfile.ZipFile(src) as apk:
+        for name, title in MODELS.items():
+            prefix = f"assets/{name}/"
+            pack = os.path.join(work, f"{name}.zip")
+            files = {}
+            with zipfile.ZipFile(pack, "w", zipfile.ZIP_DEFLATED, allowZip64=True) as out:
+                for info in apk.infolist():
+                    if info.filename.startswith(prefix) and not info.is_dir() and not info.filename.endswith("/.sig"):
+                        rel = info.filename[len(prefix):]
+                        files[rel] = info.file_size
+                        with apk.open(info) as data, out.open(rel, "w", force_zip64=True) as to:
+                            shutil.copyfileobj(data, to, 1 << 20)
+            entry = release_file(version, pack, f"{name}-{version}.zip", work + "/out")
+            packs[name] = {**entry, "title": title, "files": files}
+    return packs
+
+
+def voice_pack(name, title, version, src, work):
+    """Голос из папки: один .onnx, tokens.txt и espeak-ng-data."""
+    pack = os.path.join(work, f"{name}.zip")
+    files = {}
+    with zipfile.ZipFile(pack, "w", zipfile.ZIP_DEFLATED, allowZip64=True) as out:
+        for root, _, names in os.walk(src):
+            for n in names:
+                path = os.path.join(root, n)
+                rel = os.path.relpath(path, src).replace(os.sep, "/")
+                files[rel] = os.path.getsize(path)
+                out.write(path, rel)
+    entry = release_file(version, pack, f"{name}-{version}.zip", work + "/out")
+    return {**entry, "title": title, "files": files}
+
+
 def main():
     kind, version = sys.argv[1], sys.argv[2]
     work = tempfile.mkdtemp()
+    os.makedirs(work + "/out")
+    with urllib.request.urlopen(f"{BASE}/{CHANNEL}/manifest.json") as r:
+        manifest = json.load(r)
     if kind == "apk":
-        manifest = {"apk": release_file(version, sys.argv[3], f"speechassistant-q07-v{version}.apk", work)}
+        manifest.pop("dex", None)
+        manifest["apk"] = release_file(version, sys.argv[3], f"speechassistant-q07-v{version}.apk", work)
+    elif kind == "models":
+        manifest["models"] = {**manifest.get("models", {}), **model_packs(version, sys.argv[3], work)}
+    elif kind == "voice":
+        name, title = sys.argv[3], sys.argv[4]
+        manifest.setdefault("models", {})[name] = voice_pack(name, title, version, sys.argv[5], work)
     else:
-        with urllib.request.urlopen(f"{BASE}/{CHANNEL}/manifest.json") as r:
-            manifest = json.load(r)
         dex = os.path.join(HERE, "stand", "asr-android", "build", "dex7", "classes.dex")
         manifest["dex"] = release_file(version, dex, f"classes-{version}.dex", work)
     manifest["schema"] = 1

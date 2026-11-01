@@ -27,7 +27,7 @@ import static com.stand.bridge.Ru2Zh.*;
 public final class RuBridge {
     private static final String TAG = "RuBridge";
     /** Bump with every published dex: the log shows which code actually runs. */
-    private static final String CODE_VERSION = "q07-9";
+    private static final String CODE_VERSION = "q07-12";
 
 
     // Stock TTS-engine registry (world-writable dir; the app runs as uid=system). Registering our
@@ -911,29 +911,30 @@ public final class RuBridge {
         } catch (Throwable t) { Log.e(TAG, "onTtsText", t); return false; }
     }
 
-    private static final String[] NAVIGATOR_PACKAGES = { "ru.yandex.yandexnavi", "ru.dublgis.dgismobile", "ru.yandex.yandexmaps" };
-
-    /** «открой навигатор», «запусти ютуб»: works without the backend, by the launcher label of an installed app. */
+    /** «открой навигатор», «запусти ютуб»: works without the backend, by a known name or the label of an installed app. */
     private static boolean openAppByName(String phrase) {
-        String[] w = phrase.trim().split("\\s+", 2);
-        if (w.length < 2 || !(w[0].equals("открой") || w[0].equals("запусти"))) return false;
-        String name = w[1].replace("приложение", "").trim();
-        if (name.length() < 2) return false;
+        String name = AppNames.nameIn(phrase);
+        if (name == null) return false;
         try {
             android.content.pm.PackageManager pm = appCtx.getPackageManager();
-            if (name.startsWith("навигат") || name.startsWith("навигац")) {
-                for (String pkg : NAVIGATOR_PACKAGES) {
-                    if (launch(pm, pm.getLaunchIntentForPackage(pkg), "Открываю навигатор")) return true;
-                }
+            java.util.List<String> known = AppNames.knownPackages(name);
+            for (String pkg : known) {
+                Intent it = pm.getLaunchIntentForPackage(pkg);
+                if (it != null) return launch(pm, it, "Открываю " + pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)));
             }
             Intent q = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER);
             for (android.content.pm.ResolveInfo r : pm.queryIntentActivities(q, 0)) {
                 String label = String.valueOf(r.loadLabel(pm));
-                if (label.equalsIgnoreCase(name)) {
+                if (AppNames.sameName(name, label)) {
                     return launch(pm, pm.getLaunchIntentForPackage(r.activityInfo.packageName), "Открываю " + label);
                 }
             }
+            if (!known.isEmpty()) {
+                speak("Это приложение не установлено");
+                return true;
+            }
         } catch (Throwable t) { Log.e(TAG, "openAppByName", t); }
+        Log.i(TAG, "openAppByName: no app for [" + name + "]");
         return false;
     }
 
@@ -2028,6 +2029,10 @@ public final class RuBridge {
             return;
         }
         if (openAppByName(low)) return;
+        if (low.equals("привет") || low.equals("здравствуй") || low.equals("здравствуйте")) {
+            speak("Здравствуйте");
+            return;
+        }
         if (low.contains("что ты умеешь") || low.contains("что умеешь")) {
             speak("Управляю окнами, люком, климатом, сиденьями и светом, открываю приложения.");
             return;

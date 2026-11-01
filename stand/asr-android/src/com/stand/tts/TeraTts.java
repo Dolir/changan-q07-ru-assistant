@@ -7,30 +7,30 @@
 package com.stand.tts;
 
 import android.content.Context;
-import android.content.res.AssetManager;
 import android.media.AudioFormat;
 import android.media.AudioManager;
 import android.media.AudioTrack;
 import android.util.Log;
 import java.io.File;
-import java.io.FileOutputStream;
-import java.io.InputStream;
-import java.io.OutputStream;
 import com.stand.tts.tera.TeraTTS;
 
 /**
  * TeraTTS (ru_f2) backend for the native TTS engine (PiperCaTts). Pure-Java inference on the STOCK
  * onnxruntime 1.17.1 (we bundle only libonnxruntime4j_jni.so; libonnxruntime.so is the stock one).
  * Output is mono float @44100 → resampled to the player rate (24000) and packed to 16-bit PCM.
- * synthesize() is NOT thread-safe → guarded by LOCK. Model assets (~370 MB) unpack to filesDir once.
+ * synthesize() is NOT thread-safe → guarded by LOCK. The models (~370 MB) are not in the APK, see ModelStore.
  */
 public final class TeraTts {
     private static final String TAG = "TeraTts";
-    private static final String ASSET_DIR = "tera";     // apk assets/tera: models/, unicode_indexer.json, styles/
+    private static final String MODEL_DIR = "tera";     // models/, unicode_indexer.json, styles/
     private static final String VOICE = "ru_f2";
     private static final int NATIVE_RATE = 44100;       // TeraTTS output rate
     private static final float SPEED = 0.9f;            // durationScale <1 = faster speech (user wanted quicker)
+    /** Which voice OpenQiyuan selected: a folder name next to the other models, anything else is Tera. */
+    private static final String VOICE_SETTING = "openqiyuan_assistant_voice";
+    private static final String TERA = "tera";
     private static volatile TeraTTS engine;
+    private static volatile PiperVoice piper;
     private static Context appCtx;
     private static final Object LOCK = new Object();
 
@@ -95,18 +95,19 @@ public final class TeraTts {
     private static final int RATE = 24000;   // native TTS player rate (TtsAudioManager.SAMPLE_RATE_DEFAULT)
 
     private static synchronized boolean ensure() {
-        if (engine != null) return true;
+        if (engine != null || piper != null) return true;
         try {
-            File dir = new File(appCtx.getFilesDir(), ASSET_DIR);
-            // pm install -r KEEPS filesDir, so a plain existence check would keep loading STALE models
-            // after a model swap (fp16<->fp32, sampler step change) → broken/silent audio until pm clear.
-            // Guard with a signature (name+size of every bundled model): on mismatch, wipe models/ and
-            // re-unpack so a new APK's models always win without needing pm clear.
-            if (needsUnpack(dir)) {
-                Log.i(TAG, "unpacking Tera assets to " + dir + " (~370 MB; model set changed or missing)");
-                deleteRec(new File(dir, "models"));          // drop stale models (incl. renamed sampler)
-                unpackAssets(ASSET_DIR, dir);
-                writeText(new File(dir, "models/.sig"), modelsSig());
+            // Only the selected voice is loaded: Tera alone takes hundreds of MB
+            String selected = android.provider.Settings.Global.getString(appCtx.getContentResolver(), VOICE_SETTING);
+            if (selected != null && !selected.equals(TERA)) {
+                piper = PiperVoice.load(com.stand.bridge.ModelStore.dir(appCtx, selected));
+                if (piper != null) return true;
+                Log.e(TAG, "voice " + selected + " failed, falling back to Tera");
+            }
+            File dir = com.stand.bridge.ModelStore.dir(appCtx, MODEL_DIR);
+            if (!new File(dir, "models/vocoder.onnx").exists()) {
+                Log.e(TAG, "models are missing in " + dir);
+                return false;
             }
             // Runtime toggle for HW acceleration: `adb shell settings put global tera_nnapi 1` (then restart).
             try {
@@ -143,8 +144,13 @@ public final class TeraTts {
             if (ctx() == null || !ensure()) { Log.e(TAG, "synthPcm16: engine not ready"); return new byte[0]; }
             long t0 = System.currentTimeMillis();
             float[] s;
-            synchronized (LOCK) { s = engine.synthesize(t, SPEED); }
-            float[] rs = (NATIVE_RATE == targetRate) ? s : resample(s, NATIVE_RATE, targetRate);
+            int from;
+            synchronized (LOCK) {
+                PiperVoice voice = piper;
+                s = voice != null ? voice.synthesize(t) : engine.synthesize(t, SPEED);
+                from = voice != null ? voice.rate() : NATIVE_RATE;
+            }
+            float[] rs = (from == targetRate) ? s : resample(s, from, targetRate);
             byte[] pcm = new byte[rs.length * 2];
             for (int i = 0; i < rs.length; i++) {
                 int v = Math.round(rs[i] * 32767f);
@@ -152,7 +158,7 @@ public final class TeraTts {
                 pcm[i * 2] = (byte) (v & 0xff);
                 pcm[i * 2 + 1] = (byte) ((v >> 8) & 0xff);
             }
-            Log.i(TAG, "synthPcm16 " + rs.length + " @" + targetRate + " (from " + NATIVE_RATE + ") in "
+            Log.i(TAG, "synthPcm16 " + rs.length + " @" + targetRate + " (from " + from + ") in "
                     + (System.currentTimeMillis() - t0) + "ms: " + t);
             if (pcm.length <= 400000) CACHE.put(key, pcm);   // cache short phrases (~<8s) for instant repeat
             return pcm;
@@ -170,69 +176,6 @@ public final class TeraTts {
             out[i] = (float) (a + (b - a) * frac);
         }
         return out;
-    }
-
-    /** Re-unpack if a key non-model file is missing OR the bundled model set (name+size of every file
-     *  under assets/tera/models) differs from what was unpacked. Catches fp16<->fp32 and sampler-step
-     *  swaps that reuse or change asset filenames — the plain existence check missed these. */
-    private static boolean needsUnpack(File dir) {
-        if (!new File(dir, "unicode_indexer.json").exists()
-                || !new File(dir, "ruaccent.bin").exists()
-                || !new File(dir, "styles/" + VOICE + "/style_ttl.bin").exists()) return true;
-        String want = modelsSig();
-        if (want.isEmpty()) return !new File(dir, "models/vocoder.onnx").exists(); // asset listing failed → fallback
-        String have = readText(new File(dir, "models/.sig"));
-        if (want.equals(have)) return false;
-        Log.i(TAG, "models signature changed:\n  apk =" + want + "\n  disk=" + have);
-        return true;
-    }
-    /** "name:size|..." (sorted) over assets/tera/models — cheap (openFd length, no full read; assets are zip-stored). */
-    private static String modelsSig() {
-        try {
-            String base = ASSET_DIR + "/models";
-            String[] list = appCtx.getAssets().list(base);
-            if (list == null || list.length == 0) return "";
-            java.util.Arrays.sort(list);
-            StringBuilder sb = new StringBuilder();
-            for (String n : list) { if (n.equals(".sig")) continue; sb.append(n).append(':').append(assetLen(base + "/" + n)).append('|'); }
-            return sb.toString();
-        } catch (Throwable t) { return ""; }
-    }
-    private static long assetLen(String path) {
-        try { android.content.res.AssetFileDescriptor fd = appCtx.getAssets().openFd(path);
-              long n = fd.getLength(); fd.close(); return n; }
-        catch (Throwable t) { return -1; }
-    }
-    private static void deleteRec(File f) {
-        try { if (f.isDirectory()) { File[] ch = f.listFiles(); if (ch != null) for (File c : ch) deleteRec(c); }
-              f.delete(); } catch (Throwable ignored) {}
-    }
-    private static String readText(File f) {
-        try { byte[] b = new byte[(int) f.length()]; java.io.FileInputStream in = new java.io.FileInputStream(f);
-              int off = 0, n; while (off < b.length && (n = in.read(b, off, b.length - off)) > 0) off += n; in.close();
-              return new String(b, 0, off, "UTF-8"); }
-        catch (Throwable t) { return ""; }
-    }
-    private static void writeText(File f, String s) {
-        try { f.getParentFile().mkdirs(); FileOutputStream o = new FileOutputStream(f);
-              o.write(s.getBytes("UTF-8")); o.close(); }
-        catch (Throwable t) { Log.e(TAG, "writeText " + f, t); }
-    }
-
-    private static void unpackAssets(String assetDir, File outDir) throws Exception {
-        AssetManager am = appCtx.getAssets();
-        String[] list = am.list(assetDir);
-        if (list == null || list.length == 0) {   // file
-            outDir.getParentFile().mkdirs();
-            InputStream in = am.open(assetDir);
-            OutputStream out = new FileOutputStream(outDir);
-            byte[] b = new byte[1 << 16]; int n;
-            while ((n = in.read(b)) > 0) out.write(b, 0, n);
-            in.close(); out.close();
-            return;
-        }
-        outDir.mkdirs();
-        for (String name : list) unpackAssets(assetDir + "/" + name, new File(outDir, name));
     }
 
     // ---- Direct playback path (replaces the former PiperTts.speak): used to voice our own RU
