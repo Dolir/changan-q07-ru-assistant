@@ -94,6 +94,8 @@ public final class TeraTts {
     }
     private static final int RATE = 24000;   // native TTS player rate (TtsAudioManager.SAMPLE_RATE_DEFAULT)
 
+    public static boolean ready() { return engine != null || piper != null; }
+
     private static synchronized boolean ensure() {
         if (engine != null || piper != null) return true;
         try {

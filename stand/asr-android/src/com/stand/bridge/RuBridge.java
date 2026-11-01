@@ -27,7 +27,7 @@ import static com.stand.bridge.Ru2Zh.*;
 public final class RuBridge {
     private static final String TAG = "RuBridge";
     /** Bump with every published dex: the log shows which code actually runs. */
-    private static final String CODE_VERSION = "q07-18";
+    private static final String CODE_VERSION = "q07-19";
 
 
     // Stock TTS-engine registry (world-writable dir; the app runs as uid=system). Registering our
@@ -467,6 +467,7 @@ public final class RuBridge {
         if (mainProc) {
             reconnectExecutor();
             try { com.stand.asr.GigaAsr.init(appCtx); } catch (Throwable t) { Log.e(TAG, "gigaam init", t); }
+            reportModelsLoaded();
             new Thread(new Runnable() { public void run() {
                 try {   // prime backend dicts + status + installed-apps cache (off the request hot path)
                     userAppPackages();   // warm the app allowlist now (~seconds) so requests don't pay it
@@ -541,6 +542,23 @@ public final class RuBridge {
         } catch (Throwable t) { Log.e(TAG, "decodeAndAct", t); }
     }
 
+    /** VoiceApp.notifyInit shows «Загрузка ресурсов» with no time limit and it holds back the idle hints. Its stock
+     *  end is a type 1 text, which filterShowText drops, and the stock engine is not what the phrase is waiting for. */
+    private static void reportModelsLoaded() {
+        new Thread(new Runnable() { public void run() {
+            long deadline = System.currentTimeMillis() + MODELS_LOAD_LIMIT_MS;
+            while (!(com.stand.asr.GigaAsr.ready() && com.stand.tts.TeraTts.ready())) {
+                if (System.currentTimeMillis() > deadline) {
+                    Log.e(TAG, "models are not loaded");
+                    showOnScreen("Голосовые модели не загружены", TYPE_FEEDBACK, 8000);
+                    return;
+                }
+                try { Thread.sleep(500); } catch (InterruptedException e) { return; }
+            }
+            showOnScreen("Ассистент готов", TYPE_FEEDBACK, 2000);
+        }}).start();
+    }
+
     /** Speak text via the assistant's TTS engine. */
     /** Test hook (StandNluReceiver sayb64): push text through the stock TTS route. */
     public static void speakTest(String text) { speak(text); }
@@ -585,11 +603,16 @@ public final class RuBridge {
     static final int TYPE_GUIDE = 3;    // idle rotating hints
     static final int TYPE_FEEDBACK = 4; // answer / reply message
     static final int TYPE_CLEAR = 9;    // clear the bar
+    private static final long MODELS_LOAD_LIMIT_MS = 180000;
 
     /** Drive the launcher's assistant text-bar (PgsView/PgsSwitcherView) with the stock
      *  platform broadcast. `type` selects the visual state (see TYPE_* above); the stock
      *  voice UI uses the very same Intent (NotifierUtil.notifyTextChanged). */
     static void showOnScreen(String text, int type) {
+        showOnScreen(text, type, 5000);
+    }
+
+    static void showOnScreen(String text, int type, int time) {
         try {
             if (appCtx == null || text == null) return;
             text = text.replaceAll("^[.\\u2026\\u22ef\\s]+", "").trim();
@@ -603,7 +626,7 @@ public final class RuBridge {
             it.putExtra("direct", wakeZone);
             it.putExtra("level", 1);            // LEVEL_HIGH
             it.putExtra("type", type);
-            it.putExtra("time", 5000);
+            it.putExtra("time", time);
             if (type == TYPE_GUIDE) it.putExtra("scroll", true);
             it.addFlags(0x20);                  // FLAG_RECEIVER_FOREGROUND
             appCtx.sendBroadcast(it);
