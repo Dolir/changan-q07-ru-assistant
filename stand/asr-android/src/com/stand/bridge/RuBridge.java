@@ -27,7 +27,7 @@ import static com.stand.bridge.Ru2Zh.*;
 public final class RuBridge {
     private static final String TAG = "RuBridge";
     /** Bump with every published dex: the log shows which code actually runs. */
-    private static final String CODE_VERSION = "q07-19";
+    private static final String CODE_VERSION = "q07-20";
 
 
     // Stock TTS-engine registry (world-writable dir; the app runs as uid=system). Registering our
@@ -1055,6 +1055,10 @@ public final class RuBridge {
      *  Unreleased, the focus count only grows and the wheel volume stays on the assistant's channel. */
     private static void finishTts(Object listener, Object player) {
         callListener(listener, "onPlayComplete", null, null);
+        if (listenAfterReply) {
+            listenAfterReply = false;
+            listenForAnswer();
+        }
         try {
             // The real player is a StreamTtsPlayer, the method and the count live in its parent.
             // TtsPlayer2 asks for focus after our hook, so it has nothing to release here.
@@ -1252,6 +1256,28 @@ public final class RuBridge {
     /** Clear the conversation buffer (e.g. on a fresh wake / long silence). */
     public static void clearHistory() { synchronized (HISTORY) { HISTORY.clear(); } }
 
+    private static final long LISTEN_AFTER_REPLY_DELAY_MS = 300;
+    private static volatile boolean listenAfterReply;
+
+    /** The assistant asked something: open a wake session without the greeting, so the answer needs no wake word. */
+    private static void listenForAnswer() {
+        new Thread(new Runnable() { public void run() {
+            try {
+                Thread.sleep(LISTEN_AFTER_REPLY_DELAY_MS);
+                Class<?> bc = Class.forName("com.incall.apps.speechassistant.controller.BusinessController");
+                Log.i(TAG, "listening for the answer, zone " + wakeZone);
+                bc.getMethod("startWakeupAsync", int.class, String.class, long.class, boolean.class)
+                        .invoke(bc.getMethod("getInstance").invoke(null), wakeZone, "", -1L, true);
+            } catch (Throwable t) { Log.e(TAG, "listenForAnswer", t); }
+        }}).start();
+    }
+
+    /** Test hook (StandNluReceiver askb64): a question spoken the way a backend reply is. */
+    public static void askTest(String text) {
+        listenAfterReply = true;
+        speak(text);
+    }
+
     static void sendToCloud(final String text) { sendToCloud(text, false, null, 0); }
     static void sendToCloud(final String text, final boolean localFailed) { sendToCloud(text, localFailed, null, 0); }
 
@@ -1305,7 +1331,7 @@ public final class RuBridge {
                         if (!one.isEmpty()) zhCmds = new org.json.JSONArray().put(one);
                     }
                 } catch (Throwable ignored) {}
-                Log.i(TAG, "backend answer for [" + text + "]: " + answer
+                Log.i(TAG, "backend answer (history " + HISTORY.size() + ") for [" + text + "]: " + answer
                         + (nlu != null ? " (+" + nlu.length() + " nluResults)" : ""));
                 // 1) execute any car commands the backend returned (implicit->action / command fallback)
                 if (nlu != null) {
@@ -1365,8 +1391,14 @@ public final class RuBridge {
                     showOnScreen(display, TYPE_FEEDBACK); // answer message on the assistant widget
                     showTtsSubtitle(display);             // spoken-subtitle channel (avatar/TTS)
                 }
-                if (!audio.isEmpty()) playPcm(audio);      // RU speech pre-synthesized by our backend
-                else if (!spoken.isEmpty()) speak(spoken);  // else our on-device Tera TTS (RU), '+' consumed
+                boolean question = display.endsWith("?");
+                if (!audio.isEmpty()) {                    // RU speech pre-synthesized by our backend
+                    playPcm(audio);
+                    if (question) listenForAnswer();
+                } else if (!spoken.isEmpty()) {            // else our on-device Tera TTS (RU), '+' consumed
+                    listenAfterReply = question;
+                    speak(spoken);
+                }
                 // record this exchange for multi-turn context (clean text, no '+' stress marks)
                 recordTurn(text, stripStress(!followup.isEmpty() ? followup : answer));
             } catch (Throwable t) {

@@ -335,6 +335,10 @@ final class Ru2Zh {
     }
 
     /** Same as {@link #ru2zh(String, int)} with the speaker assumed in the driver seat (tests / no seat info). */
+    /** Said alone these end the dialog. «топ» is «стоп» with its start clipped, which happens outside the car. */
+    private static final java.util.Set<String> DISMISS = new java.util.HashSet<String>(java.util.Arrays.asList(
+        "стоп", "топ", "хватит", "отключись", "все", "все спасибо", "спасибо все", "пока", "до свидания", "свободна"));
+
     static String ru2zh(String t) { return ru2zh(t, 1); }
 
     /** @param speakerDir SrBaseSession direction of the seat that spoke (1=driver, 2=passenger, 3/4/5=rear);
@@ -347,6 +351,7 @@ final class Ru2Zh {
         // A compound («закрой все окна и выключи климат») must not be mapped as ONE command: the single mapper
         // picked one clause and bled the other's slots into it (关闭所有空调). ru2zhAll() maps it clause by clause.
         if (clausesOf(s) != null) return null;
+        if (DISMISS.contains(s.trim())) return "退下";             // EXIT_VOICE_ASSIST: stops listening, says goodbye
         if (BRAND.matcher(s).find()) return null;                  // a named third-party app → backend launches it
         // Vehicle-status questions ("сколько осталось заряда", "какой запас хода", "давление в шинах") are
         // answered by the CAR with live data — they must win over the question-word guard below, which

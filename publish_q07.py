@@ -5,6 +5,7 @@
   python publish_q07.py dex <версия>         только наш код (stand/asr-android/build/dex7/classes.dex)
   python publish_q07.py models <версия> <apk с моделями>   пакеты моделей: OpenQiyuan скачивает их один раз
   python publish_q07.py voice <версия> <имя> <название> <папка>   голос Piper из папки, по выбору в OpenQiyuan
+  python publish_q07.py widget <версия> <apk>   рабочий стол с бегущей строкой, по выбору в OpenQiyuan
 
 Ключ подписи: ../openqiyuan/keys/update_signing.pem (в git не хранится), открытая часть — в AssistantManager.kt.
 Требует gh и openssl.
@@ -100,7 +101,9 @@ def main():
     os.makedirs(work + "/out")
     with urllib.request.urlopen(f"{BASE}/{CHANNEL}/manifest.json") as r:
         manifest = json.load(r)
-    if kind == "apk":
+    if kind == "widget":
+        manifest["widget"] = release_file(version, sys.argv[3], f"launcher-q07-v{version}.apk", work)
+    elif kind == "apk":
         manifest.pop("dex", None)
         manifest["apk"] = release_file(version, sys.argv[3], f"speechassistant-q07-v{version}.apk", work)
     elif kind == "models":

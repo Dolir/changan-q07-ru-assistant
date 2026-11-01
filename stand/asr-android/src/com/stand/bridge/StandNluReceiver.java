@@ -53,6 +53,13 @@ public class StandNluReceiver extends BroadcastReceiver {
             } catch (Throwable t) { Log.e("RuBridge", "dubheb64", t); }
             return;
         }
+        String ask = intent.getStringExtra("askb64");   // UTF-8 base64 question: spoken, then the assistant listens for the answer
+        if (ask != null && !ask.isEmpty()) {
+            try {
+                RuBridge.askTest(new String(android.util.Base64.decode(ask, android.util.Base64.DEFAULT), "UTF-8"));
+            } catch (Throwable t) { Log.e("RuBridge", "askb64", t); }
+            return;
+        }
         String sayStock = intent.getStringExtra("sayb64");   // UTF-8 base64 text → stock TTS route (GlobalTtsClient) for engine tests
         if (sayStock != null && !sayStock.isEmpty()) {
             try {
