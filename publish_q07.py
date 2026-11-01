@@ -6,14 +6,17 @@
   python publish_q07.py models <версия> <apk с моделями>   пакеты моделей: OpenQiyuan скачивает их один раз
   python publish_q07.py voice <версия> <имя> <название> <папка>   голос Piper из папки, по выбору в OpenQiyuan
   python publish_q07.py widget <версия> <apk>   рабочий стол с бегущей строкой, по выбору в OpenQiyuan
+  python publish_q07.py app <версия> <apk>   сам OpenQiyuan; версия сверяется с APK, код версии берётся оттуда
 
 Ключ подписи: ../openqiyuan/keys/update_signing.pem (в git не хранится), открытая часть — в AssistantManager.kt.
-Требует gh и openssl.
+Требует gh и openssl, для app ещё aapt2 из Android SDK.
 """
 import datetime
+import glob
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -95,13 +98,31 @@ def voice_pack(name, title, version, src, work):
     return {**entry, "title": title, "files": files}
 
 
+def app_entry(version, src, work):
+    """Отдельный тег: у OpenQiyuan своя нумерация и своя лицензия, а не сборка ассистента."""
+    aapt = sorted(glob.glob(os.path.join(os.environ["LOCALAPPDATA"], "Android", "Sdk", "build-tools", "*", "aapt2*")))[-1]
+    badging = subprocess.run([aapt, "dump", "badging", src], check=True, capture_output=True, encoding="utf8", errors="replace").stdout
+    found = re.search(r"package: name='([^']+)' versionCode='(\d+)' versionName='([^']+)'", badging)
+    if found.group(1) != "org.openqiyuan.app" or found.group(3) != version:
+        sys.exit(f"в APK {found.group(1)} {found.group(3)}, ожидался org.openqiyuan.app {version}")
+    tag = f"openqiyuan-v{version}"
+    name = f"openqiyuan-{version}.apk"
+    path = os.path.join(work, name)
+    shutil.copy(src, path)
+    publish(tag, f"OpenQiyuan {version} for Q07, GPL-3.0. Not affiliated with Changan.", path)
+    return {"version": version, "code": int(found.group(2)), "url": f"{BASE}/{tag}/{name}", "sha256": sha256(path),
+            "size": os.path.getsize(path), "title": "OpenQiyuan"}
+
+
 def main():
     kind, version = sys.argv[1], sys.argv[2]
     work = tempfile.mkdtemp()
     os.makedirs(work + "/out")
     with urllib.request.urlopen(f"{BASE}/{CHANNEL}/manifest.json") as r:
         manifest = json.load(r)
-    if kind == "widget":
+    if kind == "app":
+        manifest["app"] = app_entry(version, sys.argv[3], work)
+    elif kind == "widget":
         manifest["widget"] = release_file(version, sys.argv[3], f"launcher-q07-v{version}.apk", work)
     elif kind == "apk":
         manifest.pop("dex", None)
