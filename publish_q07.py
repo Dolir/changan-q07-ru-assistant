@@ -114,12 +114,24 @@ def app_entry(version, src, work):
             "size": os.path.getsize(path), "title": "OpenQiyuan"}
 
 
+def current_manifest():
+    """Подпись проверяем до правки: иначе подменённый на GitHub манифест ушёл бы на машины с нашей подписью."""
+    with tempfile.TemporaryDirectory() as tmp:
+        body, sig = os.path.join(tmp, "manifest.json"), os.path.join(tmp, "manifest.json.sig")
+        for path in (body, sig):
+            with urllib.request.urlopen(f"{BASE}/{CHANNEL}/{os.path.basename(path)}") as r, open(path, "wb") as f:
+                shutil.copyfileobj(r, f)
+        if subprocess.run([OPENSSL, "dgst", "-sha256", "-prverify", KEY, "-signature", sig, body], capture_output=True).returncode != 0:
+            sys.exit("подпись текущего манифеста неверна: CDN мог отдать файлы разных публикаций, повтори позже; если не проходит — манифест подменён")
+        with open(body, encoding="utf-8") as f:
+            return json.load(f)
+
+
 def main():
     kind, version = sys.argv[1], sys.argv[2]
     work = tempfile.mkdtemp()
     os.makedirs(work + "/out")
-    with urllib.request.urlopen(f"{BASE}/{CHANNEL}/manifest.json") as r:
-        manifest = json.load(r)
+    manifest = current_manifest()
     if kind == "app":
         manifest["app"] = app_entry(version, sys.argv[3], work)
     elif kind == "widget":
