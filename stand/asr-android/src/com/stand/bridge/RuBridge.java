@@ -27,7 +27,7 @@ import static com.stand.bridge.Ru2Zh.*;
 public final class RuBridge {
     private static final String TAG = "RuBridge";
     /** Bump with every published dex: the log shows which code actually runs. */
-    private static final String CODE_VERSION = "q07-12";
+    private static final String CODE_VERSION = "q07-14";
 
 
     // Stock TTS-engine registry (world-writable dir; the app runs as uid=system). Registering our
@@ -465,6 +465,7 @@ public final class RuBridge {
         if (ttsProc || mainProc) { try { com.stand.tts.TeraTts.init(appCtx); } catch (Throwable ignored) {} }
         // GigaAM ASR: the audio-callback feed (SrBaseSession) only runs in the main process.
         if (mainProc) {
+            reconnectExecutor();
             try { com.stand.asr.GigaAsr.init(appCtx); } catch (Throwable t) { Log.e(TAG, "gigaam init", t); }
             new Thread(new Runnable() { public void run() {
                 try {   // prime backend dicts + status + installed-apps cache (off the request hot path)
@@ -885,6 +886,7 @@ public final class RuBridge {
         try {
             if (text == null || text.trim().isEmpty()) return false;
             Log.i(TAG, "TTS text in: " + text);
+            lastReplyAt = android.os.SystemClock.elapsedRealtime();
             String ru;
             if (hasCJK(text)) {                       // still Chinese (not overlaid) → translate
                 ru = zh2ru(text);
@@ -909,6 +911,40 @@ public final class RuBridge {
             }});
             return true;
         } catch (Throwable t) { Log.e(TAG, "onTtsText", t); return false; }
+    }
+
+    private static final String EXECUTOR = "com.incall.apps.speechadapter";
+    private static final long EXECUTOR_RECONNECT_DELAY_MS = 5000L;
+
+    /** The executor (speechadapter) keeps its connection to this process, and after we restart its replies fail with
+     *  startSpeak ret: -2: the commands still run, but the real result is never spoken. Restarted, it connects again. */
+    private static void reconnectExecutor() {
+        new Thread(new Runnable() { public void run() {
+            try {
+                Thread.sleep(EXECUTOR_RECONNECT_DELAY_MS);
+                android.app.ActivityManager am = (android.app.ActivityManager) appCtx.getSystemService(Context.ACTIVITY_SERVICE);
+                for (android.app.ActivityManager.RunningAppProcessInfo p : am.getRunningAppProcesses()) {
+                    if (p.processName.equals(EXECUTOR)) {
+                        Log.i(TAG, "restarting the executor, pid " + p.pid);
+                        android.os.Process.killProcess(p.pid);
+                    }
+                }
+            } catch (Throwable t) { Log.e(TAG, "reconnectExecutor", t); }
+        }}, "stand-executor").start();
+    }
+
+    private static final long EXECUTOR_REPLY_WAIT_MS = 2500L;
+    private static volatile long lastReplyAt;
+
+    /** The executor speaks the real result itself, which may be a refusal. Our own words are only for a silent command. */
+    private static void confirmIfSilent(final String text) {
+        final long sentAt = android.os.SystemClock.elapsedRealtime();
+        new Thread(new Runnable() { public void run() {
+            try { Thread.sleep(EXECUTOR_REPLY_WAIT_MS); } catch (InterruptedException e) { return; }
+            if (lastReplyAt >= sentAt) return;
+            Log.i(TAG, "executor stayed silent, confirming: " + text);
+            speak(text);
+        }}, "stand-confirm").start();
     }
 
     /** «открой навигатор», «запусти ютуб»: works without the backend, by a known name or the label of an installed app. */
@@ -2013,7 +2049,7 @@ public final class RuBridge {
             // Remember it (try #1) in case the native NLU can't handle the injected command: we then
             // re-send the RU to the LLM for one corrected try. See onLocalCommandFailed.
             noteInjected(ru, zhs[0], 1);
-            Log.i(TAG, "ru2zh: [" + ru + "] -> " + zhs[0]); injectZh(zhs[0]); speak(confirmation(low)); return;
+            Log.i(TAG, "ru2zh: [" + ru + "] -> " + zhs[0]); injectZh(zhs[0]); confirmIfSilent(confirmation(low)); return;
         }
         if (zhs != null) {
             // Compound: inject clause by clause, serialized like the backend's multi-intent path. Not noted
@@ -2024,7 +2060,7 @@ public final class RuBridge {
                     if (i > 0) { try { Thread.sleep(900); } catch (InterruptedException ignored) {} }
                     injectZh(zhs[i]);
                 }
-                speak(CONFIRM_DONE);
+                confirmIfSilent(CONFIRM_DONE);
             }}).start();
             return;
         }

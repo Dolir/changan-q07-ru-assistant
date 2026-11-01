@@ -88,9 +88,9 @@ avariyani yoq	打开双闪
 tuman chiroqlarini yoq	打开雾灯
 gabaritlarni yoq	打开示廓灯	FIELD_OFF
 orqa chiroqlarni yoq	打开尾灯
-salondagi chiroqni yoq	打开车内所有灯光
-chiroqni yoq	打开车内所有灯光
-chiroqni o'chir	关闭车内所有灯光
+salondagi chiroqni yoq	打开所有阅读灯
+chiroqni yoq	打开所有阅读灯
+chiroqni o'chir	关闭所有阅读灯
 yukxona chirog'ini yoq	打开后备箱灯
 # ko'zgular rul tozalagichlar
 ko'zgular isitishini yoq	打开后视镜加热
@@ -424,17 +424,17 @@ sovutgichni yoq	打开车载冰箱
 xolodilnikni o'chir	关闭车载冰箱
 muzlatgichni besh darajaga	把车载冰箱温度调到5度
 muzlatgich eshikchasini och	打开冰箱门
-chiroqni yoq	打开车内所有灯光
-chiroqni o'chir	关闭车内所有灯光
-chiroqni so'ndir	关闭车内所有灯光
-yorug'likni o'chir	关闭车内所有灯光
-chiroqni yondir	打开车内所有灯光
+chiroqni yoq	打开所有阅读灯
+chiroqni o'chir	关闭所有阅读灯
+chiroqni so'ndir	关闭所有阅读灯
+yorug'likni o'chir	关闭所有阅读灯
+chiroqni yondir	打开所有阅读灯
 yoritishni yoq	打开氛围灯
-salon yoritishini o'chir	关闭车内所有灯光
-lampani yoq	打开左前阅读灯
-lampochkani yoq	打开左前阅读灯
-salondagi chiroqni yoq	打开车内所有灯光
-lampani o'chir	关闭左前阅读灯
+salon yoritishini o'chir	关闭所有阅读灯
+lampani yoq	打开主驾阅读灯
+lampochkani yoq	打开主驾阅读灯
+salondagi chiroqni yoq	打开所有阅读灯
+lampani o'chir	关闭主驾阅读灯
 ambient podsvetkani yoq	打开氛围灯
 neon podsvetkani yoq	打开氛围灯
 kunduzgi chiroqlarni yoq	打开位置灯	FIELD_OFF
@@ -527,7 +527,7 @@ vayfay tarqat	打开热点
 trubkani ol	接听
 pardani och	打开遮阳帘
 orqa massajini yoq	打开主驾座椅按摩
-salon chirog'ini yoq	打开车内所有灯光
+salon chirog'ini yoq	打开所有阅读灯
 ko'zgularni isit	打开后视镜加热
 rulni isit	打开方向盘加热
 telefonni simsiz zaryadlashga	打开无线充电
@@ -608,7 +608,7 @@ chiroqlarni avtomatik rejimga	打开自动近光灯
 yaqin nurni avtomatik rejimga	打开自动近光灯
 avtomatik faralarni o'chir	关闭自动近光灯
 uzoq nurni avtomatik rejimga	打开自动远光灯
-mashinadagi chiroqni yoq	打开车内所有灯光
+mashinadagi chiroqni yoq	打开所有阅读灯
 # --- xalq iboralari ---
 og'izga pufla	空调吹面
 aftga pufla	空调吹面
@@ -623,13 +623,13 @@ bu yer jazirama	温度调低一点
 havo dim	温度调低一点
 davom et chal	播放
 # --- salon chirog'i joylashuv bilan ---
-salondagi butun chiroqni yoq	打开车内所有灯光
-salondagi butun chiroqni o'chir	关闭车内所有灯光
+salondagi butun chiroqni yoq	打开所有阅读灯
+salondagi butun chiroqni o'chir	关闭所有阅读灯
 o'ng orqa o'qish chirog'ini yoq	打开右后阅读灯
-yo'lovchiga lampani yoq	打开右前阅读灯
+yo'lovchiga lampani yoq	打开副驾阅读灯
 orqada chiroqni yoq	打开后排阅读灯
 orqa chap yo'lovchiga chiroqni yoq	打开左后阅读灯
-hamma lampalarni o'chir	关闭车内所有灯光
+hamma lampalarni o'chir	关闭所有阅读灯
 # --- kuchli sovutish/isitish, eko, havo tozalash ---
 salonni tez sovut	打开强力制冷模式
 mashinani zudlik bilan sovut	打开强力制冷模式
@@ -739,7 +739,7 @@ haroratni 22 ga	把温度调到22度
 o'ng oynani och	打开副驾车窗
 chap oynani och	打开主驾车窗
 ovozni to'g'rila	NULL
-har joyda chiroqni yoq	打开车内所有灯光
+har joyda chiroqni yoq	打开所有阅读灯
 # --- katalog auditi: yangi qurilmalar/rejimlar ---
 vaznsizlik rejimini yoq	打开主驾零重力模式
 o'rindiqni vaznsizlikka yoy	打开主驾零重力模式

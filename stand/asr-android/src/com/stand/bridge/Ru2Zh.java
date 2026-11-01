@@ -819,9 +819,9 @@ final class Ru2Zh {
         if (s.contains("задн") && (s.contains("фонар") || s.contains("фонарь"))) return (off ? "关闭" : "打开") + "尾灯"; // OP_TAILLIGHT
         if (s.contains("багажник") && (s.contains("свет") || s.contains("ламп"))) return (off ? "关闭" : "打开") + "后备箱灯"; // OP_TRUNK_LIGHT
         if ((s.contains("притуш") || s.contains("приглуш")) && s.contains("свет")) return "氛围灯调暗一点";
-        // Салонный свет (OP_READ_LIGHTS). Проверено на авто: голое 阅读灯 НЕ работает, нужна позиция:
-        //   打开车内所有灯光 / 关闭车内所有灯光 — весь свет в салоне («включи свет», «весь свет»)
-        //   打开右后阅读灯 и т.п.          — лампа чтения с позицией (左前/右前/左后/右后/前排/后排)
+        // Салонный свет (OP_READ_LIGHTS). Проверено на Q07 01.11.2026:
+        //   打开所有阅读灯 — весь салон; 车内所有灯光 здесь это OP_MOOD_LIGHTS, то есть подсветка, а не плафоны
+        //   打开主驾阅读灯 и т.п. — с позицией (主驾/副驾/左后/右后/后排); 左前阅读灯 движок не понимает
         // (нужен глагол действия: "я люблю свет луны" — болтовня; "зажги/погаси свет" тоже сюда)
         if ((s.contains("свет") || s.contains("освещен") || s.contains("ламп") || s.contains("плафон"))
             && !s.contains("светл") && !s.contains("свето") && !s.contains("светк") && !s.contains("дома") // «(пад)светку» — не сюда
@@ -830,20 +830,20 @@ final class Ru2Zh {
             String zc = zoneOf(s);
             boolean all = zc.equals("ALL") || s.contains("весь") || s.contains("везде");
             boolean lamp = s.contains("чтени") || s.contains("ламп") || s.contains("плафон");
-            if (all) return on + "车内所有灯光";
+            if (all) return on + "所有阅读灯";
             if (lamp || !zc.isEmpty()) {                       // лампа чтения / свет с зоной -> позиция
                 if (zc.isEmpty()) zc = zoneCode(speakerDir);     // «включи лампу» = лампа над говорящим
                 return on + zhReadZone(zc) + "阅读灯";
             }
-            return on + "车内所有灯光";                          // голое «включи свет» = весь салон
+            return on + "所有阅读灯";                            // голое «включи свет» = весь салон
         }
         return null;
     }
 
     /** Zone code -> позиция лампы чтения (штатный NLU: 左前/右前/左后/右后/前排/后排). */
     private static String zhReadZone(String code) {
-        if ("DRIVER".equals(code)) return "左前";
-        if ("PASSENGER".equals(code)) return "右前";
+        if ("DRIVER".equals(code)) return "主驾";
+        if ("PASSENGER".equals(code)) return "副驾";
         if ("REAR_LEFT".equals(code)) return "左后";
         if ("REAR_RIGHT".equals(code)) return "右后";
         if ("REAR".equals(code)) return "后排";
