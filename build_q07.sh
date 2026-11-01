@@ -299,9 +299,13 @@ echo "  classes35.dex готов"
 mkdir -p "$BDIR/lib/arm64-v8a"
 cp "$HERE/stand/asr-android/piper/jni/arm64-v8a/"*.so "$BDIR/lib/arm64-v8a/" 2>/dev/null || true
 
-# assets: модели в APK не кладём (publish_q07.py models), только звук вызова
+# assets: модели в APK не кладём (publish_q07.py models), только звук вызова.
+# BUNDLE_MODELS=<папка с gigaam и tera> — сборка без OpenQiyuan, модели внутри APK (распаковывает ModelStore).
 mkdir -p "$BDIR/assets/stand"
 "$SEVENZ" e -y -o"$BDIR/assets/stand" "$RU" "assets/stand/wake_chime.wav" >/dev/null 2>&1
+if [ -n "${BUNDLE_MODELS:-}" ]; then
+  cp -r "$BUNDLE_MODELS/gigaam" "$BUNDLE_MODELS/tera" "$BDIR/assets/"
+fi
 
 # --------------------------------------------------------------- 5. собрать APK
 echo "[6/7] собираю APK"
