@@ -3,6 +3,7 @@ package com.stand.bridge;
 import android.util.Log;
 
 import com.incall.apps.speechassistant.common.VoiceStateCache;
+import com.incall.apps.speechassistant.nlu.NluManager;
 import com.incall.apps.speechassistant.sr.SrSession;
 import com.incall.apps.voiceservice.sr.bean.NlpBean;
 import com.stand.asr.FeedTask;
@@ -43,10 +44,11 @@ public final class Hooks {
     public static void onSrMsg(int what, String msg) {
         try {
             if (what != SR_MSG_VAD || msg == null) return;
+            forgetScreenWords();
             if ("speech_start".equals(msg)) {
                 FeedTask.reset();
                 GigaAsr.reset();
-                Log.i("STAND_VAD", "speech_start -> reset");
+                Log.i("STAND_VAD", "speech_start -> reset, mute left " + com.stand.tts.TeraTts.muteLeftMs() + " ms");
             } else if ("speech_end".equals(msg) || "speech_timeout".equals(msg)) {
                 if (!VoiceStateCache.isWakeUp() && !VoiceStateCache.isOutSide()) {
                     Log.i("STAND_VAD", "speech_end/timeout ignored: assistant is asleep");
@@ -56,6 +58,18 @@ public final class Hooks {
                 FeedTask.start();
             }
         } catch (Throwable t) { Log.e(TAG, "onSrMsg", t); }
+    }
+
+    /**
+     * The stock recognizer hears Russian as Chinese or English, and a word that matches the screen is tapped right
+     * away, past onArbitrationResult: «выключи обдув всех сидений» came out as «WhatsApp» and opened it. Screen changes
+     * register the words again, so they are cleared when a phrase starts and when it ends, before the stock result.
+     */
+    private static void forgetScreenWords() {
+        try {
+            NluManager nlu = NluManager.getInstance();
+            if (nlu.isInitialized()) nlu.registerVtsHotWords(java.util.Collections.<String>emptyList());
+        } catch (Throwable t) { Log.e(TAG, "forgetScreenWords", t); }
     }
 
     /** SrSession.checkNlpResult: our commands skip FreeWakeManager. @return true to accept the result. */
@@ -95,7 +109,8 @@ public final class Hooks {
     /** NluManager.onArbitrationResult. @return false to drop the result. */
     public static boolean onArbitrationResult(String json) {
         try {
-            if (!RuBridge.isOurs(json) && VoiceStateCache.isOutSide()) {
+            // In the cabin too: the stock recognizer heard Russian as «回KTV», and its own NLU opened the karaoke app
+            if (!RuBridge.isOurs(json)) {
                 Log.i(TAG, "onArbitrationResult: dropped non-ours (Chinese) NLU result");
                 return false;
             }

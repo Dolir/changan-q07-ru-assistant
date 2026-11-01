@@ -214,12 +214,15 @@ public final class TeraTts {
         } catch (Throwable t) { Log.w(TAG, "outside", t); return false; }
     }
 
-    /** After the track stops the cabin still rings for a moment. */
-    private static final long ECHO_TAIL_MS = 600;
+    /** After the track stops the cabin still rings for a moment. At 600 ms a person answering right away lost the first word. */
+    private static final long ECHO_TAIL_MS = 200;
     private static volatile long speakingUntil = 0;
 
     /** The microphones hear our own voice: anything recorded now would come back as a command. */
     public static boolean isSpeaking() { return android.os.SystemClock.elapsedRealtime() < speakingUntil; }
+
+    /** How much longer the microphones stay muted, for the log. */
+    public static long muteLeftMs() { return Math.max(0, speakingUntil - android.os.SystemClock.elapsedRealtime()); }
 
     /** Stream 16-bit mono PCM through AudioTrack (blocks ~duration+250 ms). */
     private static synchronized void playPcm(byte[] pcm, int sr) {

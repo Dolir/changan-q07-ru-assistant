@@ -48,12 +48,47 @@ final class Ru2Zh {
         + "|подогрей|охлади|прогрей|установи|приоткрой)(?![а-я])");
     private static final String CONJ = "\\s+(?:и|а также|а потом|и потом|затем|потом|после этого)\\s+";
 
+    /** What a clause can name without its own verb: «включи массаж и подогрев», «закрой окна и люк». */
+    private static final java.util.regex.Pattern CMD_NOUN = java.util.regex.Pattern.compile(
+        "^(?:мне |еще |также )*(массаж|подогрев|обогрев|обдув|вентиляц|кондиционер|кондер|климат|свет|окн|окон|окош|люк|шторк|музык|радио|багажник)");
+    private static final java.util.regex.Pattern SEAT_FEATURE = java.util.regex.Pattern.compile("(?<![а-я])(массаж|подогрев|обдув|вентиляц)");
+    /** Which seats a clause names at its end: «массаж передних сидений». */
+    private static final java.util.regex.Pattern SEATS = java.util.regex.Pattern.compile("(?:[а-я]+ )?(?:сиден|кресл)[а-я]*$|(?:сзади|спереди)$");
+
     /** Clauses of a compound command («закрой все окна и выключи климат»), or null if the phrase is simple. */
     static String[] clausesOf(String s) {
         String[] parts = s.trim().split(CONJ);
         if (parts.length < 2) return null;
-        for (String p : parts) if (!CMD_VERB.matcher(p).find()) return null;   // «дуй в лицо и в ноги» stays simple
+        String verb = null;
+        boolean elided = false;
+        for (int i = 0; i < parts.length; i++) {
+            java.util.regex.Matcher v = CMD_VERB.matcher(parts[i]);
+            if (v.find()) { verb = v.group(1); continue; }
+            if (!CMD_NOUN.matcher(parts[i]).find()) return null;   // «дуй в лицо и в ноги» stays simple
+            elided = true;
+            if (verb != null) parts[i] = verb + " " + parts[i];
+        }
+        if (elided) shareSeats(parts);
         return parts;
+    }
+
+    /** «включи подогрев и массаж передних сидений»: the seats are said once and belong to both. */
+    private static void shareSeats(String[] parts) {
+        String seats = null;
+        for (String p : parts) {
+            java.util.regex.Matcher m = SEATS.matcher(p);
+            if (seats == null && SEAT_FEATURE.matcher(p).find() && m.find()) seats = m.group();
+        }
+        if (seats == null) {
+            // Next to the massage a bare «обдув» is the seat's, not the climate's
+            boolean massage = false;
+            for (String p : parts) massage |= p.contains("массаж");
+            if (massage) for (int i = 0; i < parts.length; i++) if (parts[i].contains("обдув")) parts[i] += " сиденья";
+            return;
+        }
+        for (int i = 0; i < parts.length; i++) {
+            if (SEAT_FEATURE.matcher(parts[i]).find() && !SEATS.matcher(parts[i]).find() && !parts[i].contains("рул")) parts[i] += " " + seats;
+        }
     }
 
     /** All commands of a phrase, in order: one element for a simple phrase, one per clause for a compound.
@@ -172,6 +207,14 @@ final class Ru2Zh {
         if (s.contains("на треть")) return 33;
         if (s.contains("на четверть")) return 25;
         return -1;
+    }
+
+    /** Opening of a window or the roof: as {@link #percentOf}, and a bare «окно на восемьдесят» means percent too. */
+    private static int openingOf(String s) {
+        int p = percentOf(s);
+        if (p >= 0 || !s.matches(".*(^|\\s)на\\s+\\S+.*") || s.contains("минут") || s.contains("секунд") || s.contains("час")) return p;
+        int n = numIn(s);
+        return n >= 1 && n <= 100 ? n : -1;
     }
 
     /** Ordinal / index: "первый".."десятый", "номер 3". -1 if absent. */
@@ -348,6 +391,7 @@ final class Ru2Zh {
         // Outside the phrase start gets clipped: «окрой» has no «откр», and «крой» alone means close
         s = s.replaceAll("(?<![а-я])окрой", "открой");
         s = s.replaceAll("(?<![а-я])клима(?![а-я])", "климат");   // ASR drops the final «т» («включи клима двадцать шесть»)
+        s = s.replaceAll("(?<![а-я])погрев", "подогрев");          // the recognizer swallows the syllable («погрев сидения»)
         // A compound («закрой все окна и выключи климат») must not be mapped as ONE command: the single mapper
         // picked one clause and bled the other's slots into it (关闭所有空调). ru2zhAll() maps it clause by clause.
         if (clausesOf(s) != null) return null;
@@ -660,7 +704,7 @@ final class Ru2Zh {
                 return (disable ? "关闭" : "打开") + "锁车关窗";
             }
             if (s.contains("приоткр") || s.contains("щелочк") || s.contains("щель")) return z + "车窗留缝";
-            int p = percentOf(s);
+            int p = openingOf(s);
             // «закрой окно на 90 процентов» = leave it 10% open (the ratio slot is the OPENING)
             if (p > 0 && p < 100 && (s.contains("закр") || s.contains("подним"))) p = 100 - p;
             if (p == 50) return z + "车窗开一半";
@@ -681,7 +725,7 @@ final class Ru2Zh {
                  && !s.contains("бак") && !s.contains("капот")))
             && !s.contains("шторк") && !s.contains("солнцезащит")
             && !s.contains("обзор") && !s.contains("камер")) {
-            int p = percentOf(s);
+            int p = openingOf(s);
             if (p == 50) return "天窗开一半";                                                  // SET_SUNROOF_WINDOW ratio=50% (captured)
             if (p > 0) return "天窗开到百分之" + p;                                           // same ratio slot as 车窗开到百分之N
             boolean close = off || s.contains("закр") || s.contains("закро") || s.contains("прикро")

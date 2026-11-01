@@ -30,6 +30,7 @@ final class AppNames {
     /** The app name in the phrase, or null if the phrase doesn't ask to open an app. */
     static String nameIn(String phrase) {
         String p = phrase.trim().toLowerCase();
+        if (p.equals("навигатор") || p.equals("яндекс навигатор")) return p;
         for (String verb : VERBS) {
             if (!p.startsWith(verb + " ")) continue;
             String name = " " + p.substring(verb.length()) + " ";

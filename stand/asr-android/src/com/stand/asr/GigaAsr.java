@@ -85,8 +85,12 @@ public final class GigaAsr {
 
     public static boolean ready() { return rec != null; }
 
-    // 350 ms ring buffer of pre-roll audio: 16000 samples/sec * 2 bytes/sample * 0.35s = 11200 bytes
-    private static final int PREROLL_SIZE = 11200;
+    /** 16 kHz, 16-bit mono. */
+    private static final int BYTES_PER_SECOND = 32000;
+    /** The stock VAD reports a phrase late: 350 ms still lost the first sound. */
+    private static final int PREROLL_SIZE = BYTES_PER_SECOND * 6 / 10;
+    /** Decode time grows with it: about 2 s at the limit. At 5 s long phrases lost their start. */
+    private static final int MAX_DECODE = BYTES_PER_SECOND * 15;
     private static final byte[] preroll = new byte[PREROLL_SIZE];
     private static int prerollHead = 0;
     private static int prerollCount = 0;
@@ -114,8 +118,8 @@ public final class GigaAsr {
     // Outside recorder: 16 kHz, 6 channels (stock log: «PcmOutRecorder start channel=6»), 12-byte frames.
     private static final int OUT_CHANNELS = 6;
     private static final int OUT_FRAME = OUT_CHANNELS * 2;
-    private static final int OUT_PREROLL = 9600 * OUT_CHANNELS;     // 600 ms: outside the phrase start was still clipped at 350 ms
-    private static final int OUT_LIMIT = 160000 * OUT_CHANNELS;     // the same 5 s as the decode tail
+    private static final int OUT_PREROLL = BYTES_PER_SECOND * OUT_CHANNELS;   // 1 s: outside the phrase start was still clipped at 300 ms
+    private static final int OUT_LIMIT = MAX_DECODE * OUT_CHANNELS;
     private static byte[] outRaw = new byte[2 * OUT_LIMIT];
     private static int outLen = 0;
 
@@ -204,9 +208,9 @@ public final class GigaAsr {
             }
         }
         if (b.length < RATE / 25 * 2) return "";   // <40 ms of audio → nothing
-        if (b.length > 160000) {
-            byte[] tail = new byte[160000];
-            System.arraycopy(b, b.length - 160000, tail, 0, 160000);
+        if (b.length > MAX_DECODE) {
+            byte[] tail = new byte[MAX_DECODE];
+            System.arraycopy(b, b.length - MAX_DECODE, tail, 0, MAX_DECODE);
             b = tail;
         }
         float[] f = new float[b.length / 2];

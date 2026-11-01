@@ -24,6 +24,8 @@ public class AppNamesTest {
         known("открой ютуб", "com.google.android.youtube");
         known("открой яндекс навигатор", "ru.yandex.yandexnavi");
         known("открой навигатор", "ru.yandex.yandexnavi");
+        known("навигатор", "ru.yandex.yandexnavi");
+        known("яндекс навигатор", "ru.yandex.yandexnavi");
         known("запусти яндекс музыку", "ru.yandex.music");
         known("открой два гис", "ru.dublgis.dgismobile");
         known("открой вотсап", "com.whatsapp");
