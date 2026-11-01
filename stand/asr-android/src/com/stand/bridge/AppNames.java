@@ -9,7 +9,7 @@ import java.util.Arrays;
  * Latin and the recognizer writes Russian, with case endings, so names are compared by a Latin form of the word stems.
  */
 final class AppNames {
-    private static final String[] VERBS = { "открой", "открыть", "запусти", "запустить", "включи", "покажи", "зайди в", "перейди в" };
+    private static final String[] VERBS = { "открой", "окрой", "открыть", "запусти", "запустить", "включи", "покажи", "зайди в", "перейди в" };
     private static final String[] NOISE = { "приложение", "программу", "программа", "пожалуйста" };
 
     /** Names that don't read like the label; the first installed package wins. */
@@ -46,6 +46,12 @@ final class AppNames {
             for (String spoken : app[0]) if (form(spoken).equals(form)) return Arrays.asList(app[1]);
         }
         return Collections.emptyList();
+    }
+
+    /** «открой навигатор» names no app, so it is the one chosen in OpenQiyuan; «яндекс навигатор» is that app. */
+    static boolean isAnyNavigator(String name) {
+        String form = form(name);
+        return form.equals(form("навигатор")) || form.equals(form("навигация")) || form.equals(form("нави"));
     }
 
     static boolean sameName(String spoken, String label) {

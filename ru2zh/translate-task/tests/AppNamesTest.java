@@ -27,6 +27,8 @@ public class AppNamesTest {
         known("запусти яндекс музыку", "ru.yandex.music");
         known("открой два гис", "ru.dublgis.dgismobile");
         known("открой вотсап", "com.whatsapp");
+        check(AppNames.isAnyNavigator(AppNames.nameIn("открой навигатор")), "любой навигатор");
+        check(!AppNames.isAnyNavigator(AppNames.nameIn("открой яндекс навигатор")), "яндекс навигатор");
         check(AppNames.sameName("телеграм", "Telegram"), "телеграм");
         check(AppNames.sameName("телеграмм", "Telegram"), "телеграмм");
         check(AppNames.sameName("настройки", "Настройки"), "настройки");

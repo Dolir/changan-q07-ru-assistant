@@ -60,6 +60,8 @@ final class Ru2Zh {
      *  null if ANY clause is not a known command — a half-executed request is worse than a backend round-trip. */
     static String[] ru2zhAll(String t, int speakerDir) {
         String s = t.toLowerCase().replace('ё', 'е');
+        // Outside the phrase start gets clipped: «окрой» has no «откр», and «крой» alone means close
+        s = s.replaceAll("(?<![а-я])окрой", "открой");
         String[] parts = clausesOf(s);
         if (parts == null) { String one = ru2zh(t, speakerDir); return one == null ? null : new String[]{one}; }
         // More than three clauses is the backend's job. It must NOT fall back to the single mapper: that one
@@ -339,6 +341,8 @@ final class Ru2Zh {
      *                    used as the default zone when the phrase names none ("подогрей сиденье"). */
     static String ru2zh(String t, int speakerDir) {
         String s = t.toLowerCase().replace('ё', 'е');
+        // Outside the phrase start gets clipped: «окрой» has no «откр», and «крой» alone means close
+        s = s.replaceAll("(?<![а-я])окрой", "открой");
         s = s.replaceAll("(?<![а-я])клима(?![а-я])", "климат");   // ASR drops the final «т» («включи клима двадцать шесть»)
         // A compound («закрой все окна и выключи климат») must not be mapped as ONE command: the single mapper
         // picked one clause and bled the other's slots into it (关闭所有空调). ru2zhAll() maps it clause by clause.
@@ -661,6 +665,7 @@ final class Ru2Zh {
                 || s.contains("прикро") || s.contains("задвинь")
                 || ((s.contains("крой") || s.contains("кройте")) && !s.contains("откр"))
                 || s.contains("выключ") || s.contains("вверх");
+            if (!close && (s.contains("немного") || s.contains("чуть") || s.contains("слегка"))) return z + "车窗留缝";
             return (close ? "关闭" : "打开") + z + "车窗";
         }
         // "крыша/панорама" = люк, но НЕ "крышка багажника/бензобака/зарядки", не шторка и НЕ

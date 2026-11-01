@@ -27,7 +27,7 @@ import static com.stand.bridge.Ru2Zh.*;
 public final class RuBridge {
     private static final String TAG = "RuBridge";
     /** Bump with every published dex: the log shows which code actually runs. */
-    private static final String CODE_VERSION = "q07-14";
+    private static final String CODE_VERSION = "q07-18";
 
 
     // Stock TTS-engine registry (world-writable dir; the app runs as uid=system). Registering our
@@ -890,7 +890,10 @@ public final class RuBridge {
             String ru;
             if (hasCJK(text)) {                       // still Chinese (not overlaid) → translate
                 ru = zh2ru(text);
-                if (ru == null) return false;         // unknown Chinese → stock plays it
+                if (ru == null) {                     // never voice Chinese; the log shows what to add to the table
+                    Log.w(TAG, "TTS untranslated: " + text);
+                    ru = UNTRANSLATED_REPLY;
+                }
                 Log.i(TAG, "TTS ZH->RU: [" + text + "] -> " + ru);
             } else if (hasCyrillic(text)) {           // already Russian (overlays) → voice with Piper
                 ru = text;
@@ -913,6 +916,9 @@ public final class RuBridge {
         } catch (Throwable t) { Log.e(TAG, "onTtsText", t); return false; }
     }
 
+    private static final String OPENQIYUAN = "org.openqiyuan.app";
+    private static final String OPEN_APP = OPENQIYUAN + ".OPEN_APP";
+    private static final String UNTRANSLATED_REPLY = "Ответ машины пока не переведён";
     private static final String EXECUTOR = "com.incall.apps.speechadapter";
     private static final long EXECUTOR_RECONNECT_DELAY_MS = 5000L;
 
@@ -955,14 +961,16 @@ public final class RuBridge {
             android.content.pm.PackageManager pm = appCtx.getPackageManager();
             java.util.List<String> known = AppNames.knownPackages(name);
             for (String pkg : known) {
-                Intent it = pm.getLaunchIntentForPackage(pkg);
-                if (it != null) return launch(pm, it, "Открываю " + pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)));
+                if (pm.getLaunchIntentForPackage(pkg) != null) {
+                    boolean navigator = AppNames.isAnyNavigator(name);
+                    return launch(pm, pkg, navigator, navigator ? "Открываю навигатор" : "Открываю " + pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)));
+                }
             }
             Intent q = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER);
             for (android.content.pm.ResolveInfo r : pm.queryIntentActivities(q, 0)) {
                 String label = String.valueOf(r.loadLabel(pm));
                 if (AppNames.sameName(name, label)) {
-                    return launch(pm, pm.getLaunchIntentForPackage(r.activityInfo.packageName), "Открываю " + label);
+                    return launch(pm, r.activityInfo.packageName, false, "Открываю " + label);
                 }
             }
             if (!known.isEmpty()) {
@@ -974,9 +982,16 @@ public final class RuBridge {
         return false;
     }
 
-    private static boolean launch(android.content.pm.PackageManager pm, Intent it, String reply) {
-        if (it == null) return false;
-        appCtx.startActivity(it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+    /** OpenQiyuan knows the app's DPI window, the projection, the split and which navigator is chosen. Without it, a plain launch. */
+    private static boolean launch(android.content.pm.PackageManager pm, String pkg, boolean anyNavigator, String reply) {
+        Intent open = new Intent(OPEN_APP).setClassName(OPENQIYUAN, OPENQIYUAN + ".gesture.GestureService")
+                .putExtra("pkg", pkg).putExtra("navigator", anyNavigator);
+        if (pm.resolveService(open, 0) == null || appCtx.startService(open) == null) {
+            Intent it = pm.getLaunchIntentForPackage(pkg);
+            if (it == null) return false;
+            android.os.Bundle main = android.app.ActivityOptions.makeBasic().setLaunchDisplayId(android.view.Display.DEFAULT_DISPLAY).toBundle();
+            appCtx.startActivity(it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), main);
+        }
         speak(reply);
         return true;
     }
@@ -1093,6 +1108,8 @@ public final class RuBridge {
             return ru + " голосом не поддерживается";
         }
         String core = zh2ruCore(s);
+        // The executor's many wordings of "I can't do this yet"
+        if (core == null && (s.contains("学习") || s.contains("技能") || s.contains("赶工"))) core = "Этого я пока не умею";
         if (core == null) return null;
         if (addr == null || addr.isEmpty()) return core;
         // Driver: keep the greeting terse — no seat name («Водитель, чем могу помочь» звучит громоздко).
