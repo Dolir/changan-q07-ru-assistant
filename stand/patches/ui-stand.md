@@ -125,4 +125,4 @@ aiassist, но авто — **production build, root недоступен** (`ad
   вьюха есть и в лаунчере — не нужен).
 - Поставить наш `sa_ru_exec.apk` (SpeechAssistant) на AAOS: тоже снять sharedUserId=system,
   target→33, пересобрать; тогда виджет будет управляться реальным голосовым пайплайном, а не `am broadcast`.
-- «Come and customize your own desktop!» и часть строк — англ.: их нет в ru-оверлее nonToxic.
+- «Come and customize your own desktop!» и часть строк — англ.: их нет в ru-оверлее.

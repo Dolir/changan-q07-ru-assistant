@@ -729,7 +729,7 @@ public final class RuBridge {
 
     // The firmware's OWN "not supported" reply pool: string-array resources not_support[] /
     // general_notsupport[] / general_result_notsupport[] (6 shared texts). Extracted from the speechadapter
-    // string table (nontoxic/jadx_out/.../strings/com.incall.apps.speechadapter.json) by RESOURCE KEY — not
+    // string table (jadx_out/.../strings/com.incall.apps.speechadapter.json) by RESOURCE KEY — not
     // guessed. The DM picks one of these when a RECOGNIZED intent can't be performed on this car (e.g.
     // REPAIR_WIPER dispatched to CarControlAction but no wiper-service unit → no actuation). That is NOT
     // domain=unknown, so checkArbResult misses it; exact membership here catches it. Deliberately NOT in
